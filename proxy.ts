@@ -1,8 +1,8 @@
-import { updateSession } from "@/lib/supabase/proxy";
-import { type NextRequest } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 
-export async function proxy(request: NextRequest) {
-  return await updateSession(request);
+// Pass-through proxy to keep middleware wiring valid without Supabase auth helpers.
+export async function proxy(_request: NextRequest) {
+  return NextResponse.next();
 }
 
 export const config = {
