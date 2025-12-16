@@ -1,6 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Menu } from "lucide-react";
 import { getSupabaseClient } from "@/src/lib/supabaseClient";
 
 type ActiveSeason = {
@@ -42,6 +44,17 @@ export default function AdminPage() {
   const [shotLog, setShotLog] = useState<ShotLogRow[]>([]);
   const [status, setStatus] = useState<string>("");
   const [loading, setLoading] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const navigationLinks = useMemo(
+    () => [
+      { label: "Admin", href: "/admin" },
+      { label: "Standings", href: "/standings" },
+      { label: "Stats / Analytics", href: "/stats" },
+      { label: "Next Season Settings", href: "/admin/next-season" },
+    ],
+    [],
+  );
 
   const loadRoster = useCallback(
     async (seasonId: number) => {
@@ -161,6 +174,17 @@ export default function AdminPage() {
     loadActiveSeason();
   }, [loadActiveSeason]);
 
+  useEffect(() => {
+    function handleClick(event: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
+
   async function submitShot(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!client || !activeSeason) return;
@@ -204,12 +228,42 @@ export default function AdminPage() {
     <main className="min-h-screen p-6">
       <div className="max-w-6xl mx-auto space-y-8">
         <header className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-          <div>
-            <p className="text-sm uppercase tracking-widest text-emerald-300">Admin Console</p>
-            <h1 className="text-3xl font-bold text-emerald-100">Record shots</h1>
-            <p className="text-sm text-slate-300">
-              Base shot (0/1/2), optional double toggle, automatic moneyball on every 10th shot.
-            </p>
+          <div className="flex items-start gap-3">
+            <div className="relative" ref={menuRef}>
+              <button
+                type="button"
+                className="rounded-lg border border-emerald-500/50 bg-slate-900/70 p-2 text-emerald-100 hover:bg-slate-800"
+                onClick={() => setMenuOpen((open) => !open)}
+                aria-label="Open admin navigation"
+                aria-expanded={menuOpen}
+              >
+                <Menu className="h-6 w-6" />
+              </button>
+              {menuOpen && (
+                <div className="absolute z-20 mt-2 w-56 rounded-xl border border-emerald-500/40 bg-slate-900 shadow-xl">
+                  <p className="px-4 pt-3 text-xs uppercase tracking-widest text-slate-400">Navigation</p>
+                  <div className="py-2">
+                    {navigationLinks.map((link) => (
+                      <Link
+                        key={link.href}
+                        href={link.href}
+                        className="block px-4 py-2 text-sm text-slate-100 hover:bg-emerald-500/10"
+                        onClick={() => setMenuOpen(false)}
+                      >
+                        {link.label}
+                      </Link>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+            <div>
+              <p className="text-sm uppercase tracking-widest text-emerald-300">Admin Console</p>
+              <h1 className="text-3xl font-bold text-emerald-100">Record shots</h1>
+              <p className="text-sm text-slate-300">
+                Base shot (0/1/2), optional double toggle, automatic moneyball on every 10th shot.
+              </p>
+            </div>
           </div>
           <div className="text-right">
             <p className="text-sm text-slate-300">Active season</p>
