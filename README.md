@@ -24,6 +24,14 @@ Buckets is a minimal two-screen web app for recording TV-style basketball scorin
 3. Visit:
    - `/admin` to record shots (base 0/1/2, optional double, automatic moneyball every 10th shot).
    - `/standings` to show the TV view that refetches standings whenever `shot_events` change.
+   - `/login` to sign in with Supabase email/password auth.
+
+## Authentication & roles
+- Users sign in via `/login`. The global header displays the current user, role badge, and logout action.
+- Profiles are auto-created via a trigger on `auth.users` and include `display_name` and `role` (viewer/admin/owner). A fallback insert also runs after login.
+- Admin-only pages (`/admin` and `/admin/next-season`) enforce roles server-side.
+- Optional self-signup can be toggled with `NEXT_PUBLIC_ENABLE_SIGNUP=true` (disabled by default).
+- Local dev admin: set `ADMIN_BOOTSTRAP_KEY` and `SUPABASE_SERVICE_ROLE_KEY`, then visit `/dev/bootstrap-admin?key=...` while signed in to promote your account to admin. This route is disabled in production.
 
 ## Notes
 - RLS allows public read access to standings data. Any user can insert new shots via `record_shot`, while only admins (profiles.role `admin` or `owner`) can update existing `shot_events` (e.g., voiding).
