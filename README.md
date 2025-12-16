@@ -26,6 +26,6 @@ Buckets is a minimal two-screen web app for recording TV-style basketball scorin
    - `/standings` to show the TV view that refetches standings whenever `shot_events` change.
 
 ## Notes
-- RLS allows public read access to standings data while only admins (profiles.role `admin` or `owner`) can insert or update `shot_events` or call `record_shot`.
+- RLS allows public read access to standings data. Any user can insert new shots via `record_shot`, while only admins (profiles.role `admin` or `owner`) can update existing `shot_events` (e.g., voiding).
 - The `record_shot` RPC computes shot_index, moneyball multiplier, and points atomically and validates that the roster belongs to an active season.
 - The view `v_active_scoreboard_rows` powers the standings page and uses manual overrides when present.

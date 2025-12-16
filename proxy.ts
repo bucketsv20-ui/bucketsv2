@@ -1,7 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 // Pass-through proxy to keep middleware wiring valid without Supabase auth helpers.
-export async function proxy(_request: NextRequest) {
+export async function proxy(request: NextRequest) {
+  void request;
   return NextResponse.next();
 }
 

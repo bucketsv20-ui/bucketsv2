@@ -61,7 +61,15 @@ export default function AdminPage() {
         return;
       }
 
-      const mapped: RosterEntry[] = (data as any[]).map((row) => ({
+      type SupabaseRosterRow = {
+        season_roster_id: number;
+        season_id: number;
+        player?: { name?: string | null } | null;
+        season_team?: { team_name?: string | null } | null;
+        tier?: { tier_name?: string | null } | null;
+      };
+
+      const mapped: RosterEntry[] = ((data ?? []) as SupabaseRosterRow[]).map((row) => ({
         season_roster_id: row.season_roster_id,
         player_name: row.player?.name ?? "Player",
         team_name: row.season_team?.team_name ?? null,
@@ -91,17 +99,36 @@ export default function AdminPage() {
         return;
       }
 
-      const mapped: ShotLogRow[] = (data as any[]).map((row) => ({
-        shot_id: row.shot_id,
-        shot_index: row.shot_index,
-        base_value: row.base_value,
-        multiplier: row.multiplier,
-        points: row.points,
-        taken_at: row.taken_at,
-        note: row.note ?? null,
-        player_name: row.season_roster?.player?.name ?? "Unknown",
-        team_name: row.season_roster?.season_team?.team_name ?? null,
-      }));
+      type SupabaseShotRow = {
+        shot_id: number;
+        shot_index: number;
+        base_value: number;
+        multiplier: number;
+        points: number;
+        taken_at: string;
+        note?: string | null;
+        season_roster?: {
+          season_roster_id: number;
+          player?: { name?: string | null } | null;
+          season_team?: { team_name?: string | null } | null;
+        } | null;
+      };
+
+      const mapped: ShotLogRow[] = (data ?? []).map((row) => {
+        const typedRow = row as unknown as SupabaseShotRow;
+
+        return {
+          shot_id: typedRow.shot_id,
+          shot_index: typedRow.shot_index,
+          base_value: typedRow.base_value,
+          multiplier: typedRow.multiplier,
+          points: typedRow.points,
+          taken_at: typedRow.taken_at,
+          note: typedRow.note ?? null,
+          player_name: typedRow.season_roster?.player?.name ?? "Unknown",
+          team_name: typedRow.season_roster?.season_team?.team_name ?? null,
+        };
+      });
 
       setShotLog(mapped);
     },

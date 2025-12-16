@@ -102,10 +102,6 @@ declare
   v_points int;
   v_row shot_events;
 begin
-  if not is_admin() then
-    raise exception 'Only admins may record shots';
-  end if;
-
   select sr.season_id into v_season_id
   from season_roster sr
   join seasons s on s.season_id = sr.season_id
@@ -276,10 +272,16 @@ begin
     create policy shot_events_select_all on shot_events for select using (true);
   end if;
 
-  if not exists (
+  if exists (
     select 1 from pg_policies where tablename = 'shot_events' and policyname = 'shot_events_insert_admin'
   ) then
-    create policy shot_events_insert_admin on shot_events for insert with check (is_admin());
+    drop policy shot_events_insert_admin on shot_events;
+  end if;
+
+  if not exists (
+    select 1 from pg_policies where tablename = 'shot_events' and policyname = 'shot_events_insert_all'
+  ) then
+    create policy shot_events_insert_all on shot_events for insert with check (true);
   end if;
 
   if not exists (
