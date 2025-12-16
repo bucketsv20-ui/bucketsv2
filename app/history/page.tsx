@@ -213,7 +213,7 @@ export default function SeasonHistoryPage() {
       .from("seasons")
       .select("season_id, season_name, status, start_at, end_at")
       .in("status", allowedStatuses)
-      .order("end_at", { ascending: false, nullsLast: true })
+      .order("end_at", { ascending: false })
       .order("start_at", { ascending: false });
 
     if (error || !data) {
