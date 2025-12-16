@@ -69,6 +69,11 @@ create table if not exists shot_events (
   unique (season_roster_id, shot_index)
 );
 
+create index if not exists shot_events_season_id_idx on shot_events(season_id);
+create index if not exists shot_events_season_roster_id_idx on shot_events(season_roster_id);
+create index if not exists season_roster_season_player_idx on season_roster(season_id, player_id);
+create index if not exists season_roster_season_team_idx on season_roster(season_id, season_team_id);
+
 create or replace function public.is_admin()
 returns boolean
 language sql
@@ -226,6 +231,139 @@ left join team_totals tt
   on tt.season_id = rwp.season_id and coalesce(tt.season_team_id, -1) = coalesce(rwp.season_team_id, -1);
 
 grant select on v_active_scoreboard_rows to public;
+
+create or replace view public.v_season_player_standings as
+with player_totals as (
+  select
+    sr.season_id,
+    sr.player_id,
+    sr.season_team_id,
+    sr.tier_id,
+    coalesce(sum(se.points) filter (where se.is_voided = false), 0) as player_points,
+    coalesce(count(se.*) filter (where se.is_voided = false), 0) as player_shots
+  from season_roster sr
+  left join shot_events se on se.season_roster_id = sr.season_roster_id
+  group by sr.season_id, sr.player_id, sr.season_team_id, sr.tier_id
+)
+select
+  pt.season_id,
+  pt.player_id,
+  p.name as player_name,
+  pt.season_team_id,
+  st.team_name,
+  pt.tier_id,
+  t.tier_name,
+  t.color as tier_color,
+  pt.player_points,
+  pt.player_shots,
+  case when pt.player_shots > 0 then round(pt.player_points::numeric / pt.player_shots::numeric, 3) else 0 end as points_per_shot,
+  p.is_hidden as player_is_hidden,
+  dense_rank() over (partition by pt.season_id order by pt.player_points desc) as player_rank
+from player_totals pt
+join players p on p.player_id = pt.player_id
+left join season_teams st on st.season_team_id = pt.season_team_id
+left join tiers t on t.tier_id = pt.tier_id;
+
+grant select on v_season_player_standings to public;
+
+create or replace view public.v_season_team_standings as
+with player_totals as (
+  select
+    sr.season_id,
+    sr.player_id,
+    sr.season_team_id,
+    coalesce(sum(se.points) filter (where se.is_voided = false), 0) as player_points,
+    coalesce(count(se.*) filter (where se.is_voided = false), 0) as player_shots
+  from season_roster sr
+  left join shot_events se on se.season_roster_id = sr.season_roster_id
+  group by sr.season_id, sr.player_id, sr.season_team_id
+),
+team_totals as (
+  select
+    season_id,
+    season_team_id,
+    coalesce(sum(player_points), 0) as team_points,
+    coalesce(sum(player_shots), 0) as team_shots
+  from player_totals
+  group by season_id, season_team_id
+),
+free_agents as (
+  select
+    season_id,
+    null::bigint as season_team_id,
+    'Free Agents'::text as team_name,
+    null::int as sort_order,
+    coalesce(sum(player_points), 0) as team_points,
+    coalesce(sum(player_shots), 0) as team_shots
+  from player_totals
+  where season_team_id is null
+  group by season_id
+),
+team_rows as (
+  select
+    st.season_id,
+    st.season_team_id,
+    st.team_name,
+    st.sort_order,
+    coalesce(tt.team_points, 0) as team_points,
+    coalesce(tt.team_shots, 0) as team_shots
+  from season_teams st
+  left join team_totals tt on tt.season_id = st.season_id and tt.season_team_id = st.season_team_id
+  union all
+  select * from free_agents
+)
+select
+  tr.season_id,
+  tr.season_team_id,
+  tr.team_name,
+  tr.sort_order,
+  tr.team_points,
+  tr.team_shots,
+  case when tr.team_shots > 0 then round(tr.team_points::numeric / tr.team_shots::numeric, 3) else 0 end as points_per_shot,
+  dense_rank() over (partition by tr.season_id order by tr.team_points desc) as team_rank
+from team_rows tr;
+
+grant select on v_season_team_standings to public;
+
+create or replace view public.v_season_awards as
+with player_stats as (
+  select
+    season_id,
+    player_id,
+    player_name,
+    player_points,
+    player_shots,
+    points_per_shot
+  from v_season_player_standings
+),
+eligible_seasons as (
+  select distinct season_id from player_stats
+),
+award_values as (
+  select
+    es.season_id,
+    (select max(player_points) from player_stats ps where ps.season_id = es.season_id) as mvp_points,
+    (select max(player_shots) from player_stats ps where ps.season_id = es.season_id) as most_shots,
+    (select max(points_per_shot) from player_stats ps where ps.season_id = es.season_id and ps.player_shots >= 10) as best_pps
+  from eligible_seasons es
+)
+select
+  av.season_id,
+  (select array_agg(ps.player_id order by ps.player_id)
+   from player_stats ps
+   where ps.season_id = av.season_id and ps.player_points = av.mvp_points) as mvp_player_ids,
+  av.mvp_points,
+  (select array_agg(ps.player_id order by ps.player_id)
+   from player_stats ps
+   where ps.season_id = av.season_id and ps.player_shots = av.most_shots) as most_shots_player_ids,
+  av.most_shots,
+  (select array_agg(ps.player_id order by ps.player_id)
+   from player_stats ps
+   where ps.season_id = av.season_id and ps.player_shots >= 10 and ps.points_per_shot = av.best_pps) as best_pps_player_ids,
+  av.best_pps
+from award_values av;
+
+grant select on v_season_awards to public;
 
 enable row level security on seasons;
 enable row level security on season_teams;
