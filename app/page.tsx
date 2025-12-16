@@ -9,7 +9,7 @@ export default function HomePage() {
           Manage live Buckets scoring and watch standings update instantly. Use the admin console to
           record shots and the TV view for real-time rankings.
         </p>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <Link
             className="rounded-lg bg-emerald-500 text-slate-950 font-semibold py-3 px-4 text-center hover:bg-emerald-400"
             href="/admin"
@@ -27,6 +27,12 @@ export default function HomePage() {
             href="/standings"
           >
             View Standings
+          </Link>
+          <Link
+            className="rounded-lg bg-slate-900 border border-emerald-500/40 text-emerald-100 font-semibold py-3 px-4 text-center hover:bg-slate-800"
+            href="/stats"
+          >
+            Player Analytics
           </Link>
         </div>
         <p className="text-sm text-slate-400">
