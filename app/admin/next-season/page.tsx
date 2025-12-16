@@ -64,7 +64,6 @@ function useSupabaseMemo() {
 
 export default function NextSeasonSettingsPage() {
   const { client, error: envError } = useSupabaseMemo();
-  const [authStatus, setAuthStatus] = useState<"checking" | "denied" | "allowed">("checking");
   const [userId, setUserId] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string>("");
   const [loading, setLoading] = useState(false);
@@ -204,44 +203,20 @@ export default function NextSeasonSettingsPage() {
     setStatusMessage("");
   }, [loadSeasonByStatus, loadRoster, loadTeams, loadPlayers, loadTiers]);
 
-  const fetchAdminProfile = useCallback(async () => {
+  useEffect(() => {
     if (!client) return;
-    setStatusMessage("Checking admin permissions...");
-    const { data: userData, error } = await client.auth.getUser();
-
-    if (error || !userData?.user) {
-      setAuthStatus("denied");
-      setStatusMessage("Sign in as an admin or owner to manage seasons.");
-      return;
-    }
-
-    setUserId(userData.user.id);
-
-    const { data: profile, error: profileError } = await client
-      .from("profiles")
-      .select("role, display_name")
-      .eq("id", userData.user.id)
-      .maybeSingle();
-
-    if (profileError || !profile || !["admin", "owner"].includes(profile.role)) {
-      setAuthStatus("denied");
-      setStatusMessage("Only admin or owner profiles can manage seasons.");
-      return;
-    }
-
-    setAuthStatus("allowed");
-    setStatusMessage("");
+    (async () => {
+      const { data: userData } = await client.auth.getUser();
+      if (userData?.user?.id) {
+        setUserId(userData.user.id);
+      }
+    })();
   }, [client]);
 
   useEffect(() => {
     if (!client) return;
-    fetchAdminProfile();
-  }, [client, fetchAdminProfile]);
-
-  useEffect(() => {
-    if (!client || authStatus !== "allowed") return;
     refreshAll();
-  }, [client, authStatus, refreshAll]);
+  }, [client, refreshAll]);
 
   useEffect(() => {
     if (players.length > 0 && rosterPlayerId === "") {
@@ -276,7 +251,7 @@ export default function NextSeasonSettingsPage() {
         season_name: newSeasonName.trim(),
         status: "planned",
         start_at: newSeasonStart ? new Date(newSeasonStart).toISOString() : null,
-        created_by: userId,
+        created_by: userId ?? null,
       })
       .select("season_id, season_name, start_at, end_at, status")
       .single();
@@ -448,30 +423,6 @@ export default function NextSeasonSettingsPage() {
         <div className="bg-red-900/50 border border-red-500 text-red-50 rounded-xl p-6 max-w-xl w-full text-center">
           <p className="font-semibold">{envError}</p>
           <p className="mt-2 text-sm text-red-100">Update your .env.local and restart the dev server.</p>
-        </div>
-      </main>
-    );
-  }
-
-  if (authStatus === "checking") {
-    return (
-      <main className="min-h-screen flex items-center justify-center p-6">
-        <div className="flex items-center gap-3 rounded-xl border border-emerald-500/40 bg-slate-900/70 px-6 py-4 text-emerald-100">
-          <Loader2 className="h-5 w-5 animate-spin" />
-          <p>Verifying permissions...</p>
-        </div>
-      </main>
-    );
-  }
-
-  if (authStatus === "denied") {
-    return (
-      <main className="min-h-screen flex items-center justify-center p-6">
-        <div className="bg-slate-900/70 border border-amber-500/40 text-amber-100 rounded-xl p-6 max-w-xl w-full text-center space-y-3">
-          <ShieldAlert className="h-10 w-10 mx-auto text-amber-300" />
-          <h1 className="text-2xl font-semibold">Restricted</h1>
-          <p className="text-sm text-amber-200">Only admin or owner accounts can manage the next season settings.</p>
-          {statusMessage && <p className="text-xs text-amber-200">{statusMessage}</p>}
         </div>
       </main>
     );
