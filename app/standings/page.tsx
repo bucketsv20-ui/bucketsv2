@@ -28,6 +28,7 @@ export default function StandingsPage() {
   const [activeSeason, setActiveSeason] = useState<ActiveSeason | null>(null);
   const [rows, setRows] = useState<ScoreboardRow[]>([]);
   const [status, setStatus] = useState<string>("");
+  const [realtimeStatus, setRealtimeStatus] = useState<string>("");
 
   const loadStandings = useCallback(
     async (seasonId: number) => {
@@ -79,8 +80,9 @@ export default function StandingsPage() {
   useEffect(() => {
     if (!client || !activeSeason) return;
 
+    setRealtimeStatus("Connecting to live updates...");
     const channel = client
-      .channel("shot-events-feed")
+      .channel(`shot-events-feed-${activeSeason.season_id}`)
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "shot_events", filter: `season_id=eq.${activeSeason.season_id}` },
@@ -88,9 +90,20 @@ export default function StandingsPage() {
           loadStandings(activeSeason.season_id);
         },
       )
-      .subscribe();
+      .subscribe((payload) => {
+        if (payload === "SUBSCRIBED") {
+          setRealtimeStatus("Live shot updates are active. New shots will refresh automatically.");
+        }
+        if (payload === "TIMED_OUT") {
+          setRealtimeStatus("Realtime connection timed out. Retrying...");
+        }
+        if (payload === "CHANNEL_ERROR") {
+          setRealtimeStatus("Realtime connection failed. Ensure Supabase Realtime is enabled for shot_events.");
+        }
+      });
 
     return () => {
+      setRealtimeStatus("");
       client.removeChannel(channel);
     };
   }, [client, activeSeason, loadStandings]);
@@ -141,6 +154,7 @@ export default function StandingsPage() {
             <p className="text-sm text-slate-300">Active season</p>
             <p className="text-xl font-semibold text-emerald-200">{activeSeason?.season_name ?? "Not set"}</p>
             {status && <p className="text-xs text-slate-400">{status}</p>}
+            {realtimeStatus && <p className="text-xs text-emerald-300">{realtimeStatus}</p>}
           </div>
         </header>
 
