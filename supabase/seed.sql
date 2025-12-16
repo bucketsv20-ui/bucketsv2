@@ -116,6 +116,15 @@ set season_name = excluded.season_name,
     end_at = excluded.end_at,
     created_by = excluded.created_by;
 
+insert into season_settings (season_id, points_rules)
+values
+  (1, jsonb_build_object('base_values', array[0,1,2], 'multipliers', array[1,2], 'moneyball_every', 10)),
+  (2, jsonb_build_object('base_values', array[0,1,2], 'multipliers', array[1,2], 'moneyball_every', 10)),
+  (3, jsonb_build_object('base_values', array[0,1,2], 'multipliers', array[1,2], 'moneyball_every', 10))
+on conflict (season_id) do update
+set points_rules = excluded.points_rules,
+    updated_at = now();
+
 
 -- ✅ MERGE RESOLUTION: keep the systematic IDs (100/200/300 blocks) and remove conflict markers
 insert into season_teams (season_team_id, season_id, team_name, sort_order) values

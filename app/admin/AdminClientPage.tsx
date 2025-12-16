@@ -5,6 +5,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Menu } from "lucide-react";
 import { getSupabaseClient } from "@/src/lib/supabaseClient";
 
+const defaultPointsRules = {
+  base_values: [0, 1, 2],
+  multipliers: [1, 2],
+  moneyball_every: 10,
+};
+
 type ActiveSeason = {
   season_id: number;
   season_name: string;
@@ -29,6 +35,8 @@ type ShotLogRow = {
   team_name: string | null;
 };
 
+type PointsRules = typeof defaultPointsRules;
+
 function useSupabaseMemo() {
   return useMemo(() => getSupabaseClient(), []);
 }
@@ -39,16 +47,18 @@ export default function AdminClientPage() {
   const [roster, setRoster] = useState<RosterEntry[]>([]);
   const [selectedRosterId, setSelectedRosterId] = useState<number | null>(null);
   const [baseValue, setBaseValue] = useState(2);
-  const [isDouble, setIsDouble] = useState(false);
+  const [multiplier, setMultiplier] = useState(1);
   const [note, setNote] = useState("");
   const [shotLog, setShotLog] = useState<ShotLogRow[]>([]);
   const [status, setStatus] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [pointsRules, setPointsRules] = useState<PointsRules>(defaultPointsRules);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const navigationLinks = useMemo(
     () => [
       { label: "Admin", href: "/admin" },
+      { label: "Current Season Settings", href: "/admin/current-season" },
       { label: "Standings", href: "/standings" },
       { label: "Stats / Analytics", href: "/stats" },
       { label: "Next Season Settings", href: "/admin/next-season" },
@@ -91,6 +101,28 @@ export default function AdminClientPage() {
 
       setRoster(mapped);
       setSelectedRosterId((current) => current ?? mapped[0]?.season_roster_id ?? null);
+    },
+    [client],
+  );
+
+  const loadSeasonSettings = useCallback(
+    async (seasonId: number) => {
+      if (!client) return;
+      const { data } = await client.from("season_settings").select("points_rules").eq("season_id", seasonId).maybeSingle();
+
+      const rules = data?.points_rules as PointsRules | undefined;
+      const allowedBaseValues = rules?.base_values?.filter((value) => [0, 1, 2].includes(value));
+      const allowedMultipliers = rules?.multipliers?.filter((value) => [1, 2].includes(value));
+
+      const safeRules: PointsRules = {
+        base_values: allowedBaseValues?.length ? allowedBaseValues : defaultPointsRules.base_values,
+        multipliers: allowedMultipliers?.length ? allowedMultipliers : defaultPointsRules.multipliers,
+        moneyball_every: rules?.moneyball_every ?? defaultPointsRules.moneyball_every,
+      };
+
+      setPointsRules(safeRules);
+      setBaseValue((current) => (safeRules.base_values.includes(current) ? current : safeRules.base_values[0]));
+      setMultiplier((current) => (safeRules.multipliers.includes(current) ? current : safeRules.multipliers[0]));
     },
     [client],
   );
@@ -167,8 +199,8 @@ export default function AdminClientPage() {
 
     setActiveSeason(data);
     setStatus("");
-    await Promise.all([loadRoster(data.season_id), loadShotLog(data.season_id)]);
-  }, [client, loadRoster, loadShotLog]);
+    await Promise.all([loadRoster(data.season_id), loadShotLog(data.season_id), loadSeasonSettings(data.season_id)]);
+  }, [client, loadRoster, loadSeasonSettings, loadShotLog]);
 
   useEffect(() => {
     loadActiveSeason();
@@ -198,7 +230,7 @@ export default function AdminClientPage() {
     const { error } = await client.rpc("record_shot", {
       p_season_roster_id: selectedRosterId,
       p_base_value: baseValue,
-      p_multiplier: isDouble ? 2 : 1,
+      p_multiplier: multiplier,
       p_note: note.trim() || null,
     });
 
@@ -261,7 +293,7 @@ export default function AdminClientPage() {
               <p className="text-sm uppercase tracking-widest text-emerald-300">Admin Console</p>
               <h1 className="text-3xl font-bold text-emerald-100">Record shots</h1>
               <p className="text-sm text-slate-300">
-                Base shot (0/1/2), optional double toggle, automatic moneyball on every 10th shot.
+                Pick a base shot, multiplier, and optional note. Moneyball still applies automatically every 10th shot.
               </p>
             </div>
           </div>
@@ -296,32 +328,47 @@ export default function AdminClientPage() {
                 </select>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {[0, 1, 2].map((value) => (
-                  <button
-                    key={value}
-                    type="button"
-                    className={`rounded-lg border p-3 font-semibold ${
-                      baseValue === value
-                        ? "border-emerald-400 bg-emerald-500 text-slate-900"
-                        : "border-slate-600 bg-slate-800 text-slate-100"
-                    }`}
-                    onClick={() => setBaseValue(value)}
-                  >
-                    Base {value}
-                  </button>
-                ))}
-              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <p className="text-sm text-slate-200">Base value</p>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(pointsRules.base_values.length ? pointsRules.base_values : defaultPointsRules.base_values).map((value) => (
+                      <button
+                        key={value}
+                        type="button"
+                        className={`rounded-lg border p-3 font-semibold ${
+                          baseValue === value
+                            ? "border-emerald-400 bg-emerald-500 text-slate-900"
+                            : "border-slate-600 bg-slate-800 text-slate-100"
+                        }`}
+                        onClick={() => setBaseValue(value)}
+                      >
+                        Base {value}
+                      </button>
+                    ))}
+                  </div>
+                </div>
 
-              <label className="inline-flex items-center gap-3 text-sm text-slate-200">
-                <input
-                  type="checkbox"
-                  className="h-5 w-5"
-                  checked={isDouble}
-                  onChange={(e) => setIsDouble(e.target.checked)}
-                />
-                Double this shot (x2)
-              </label>
+                <div className="space-y-2">
+                  <p className="text-sm text-slate-200">Multiplier</p>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(pointsRules.multipliers.length ? pointsRules.multipliers : defaultPointsRules.multipliers).map((value) => (
+                      <button
+                        key={value}
+                        type="button"
+                        className={`rounded-lg border p-3 font-semibold ${
+                          multiplier === value
+                            ? "border-emerald-400 bg-emerald-500 text-slate-900"
+                            : "border-slate-600 bg-slate-800 text-slate-100"
+                        }`}
+                        onClick={() => setMultiplier(value)}
+                      >
+                        x{value}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
 
               <div className="space-y-2">
                 <label className="text-sm text-slate-200">Note (optional)</label>
