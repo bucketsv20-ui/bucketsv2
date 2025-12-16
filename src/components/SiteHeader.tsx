@@ -4,12 +4,13 @@ import { ensureProfileForUser } from "@/src/lib/auth/ensureProfile";
 import { getServerSupabaseClient } from "@/src/lib/supabase/server";
 
 export default async function SiteHeader() {
-  const supabase = getServerSupabaseClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseAnon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const supabaseReady = Boolean(supabaseUrl && supabaseAnon);
 
-  const profile = await ensureProfileForUser(supabase, user);
+  const supabase = supabaseReady ? await getServerSupabaseClient() : null;
+  const user = supabase ? (await supabase.auth.getUser()).data.user : null;
+  const profile = supabase ? await ensureProfileForUser(supabase, user) : null;
   const displayName = profile?.display_name ?? user?.email ?? "Guest";
 
   return (

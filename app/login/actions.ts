@@ -28,7 +28,7 @@ export async function signIn(_prevState: AuthState, formData: FormData): Promise
     return { error: "Email and password are required." };
   }
 
-  const supabase = getServerSupabaseClient();
+  const supabase = await getServerSupabaseClient();
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
 
   if (error || !data.user) {
@@ -54,7 +54,7 @@ export async function signUp(_prevState: AuthState, formData: FormData): Promise
     return { error: "Email and password are required." };
   }
 
-  const supabase = getServerSupabaseClient();
+  const supabase = await getServerSupabaseClient();
   const { data, error } = await supabase.auth.signUp({
     email,
     password,

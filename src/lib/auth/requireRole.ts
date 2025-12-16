@@ -16,7 +16,7 @@ type AllowedResult = {
 
 type DeniedResult = {
   allowed: false;
-  reason: "not_authenticated" | "missing_profile" | "forbidden";
+  reason: "not_authenticated" | "missing_profile" | "forbidden" | "missing_env";
   user?: User;
   profile?: {
     id: string;
@@ -26,7 +26,11 @@ type DeniedResult = {
 };
 
 export async function requireRole(roles: Role[]): Promise<AllowedResult | DeniedResult> {
-  const supabase = getServerSupabaseClient();
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
+    return { allowed: false, reason: "missing_env" } satisfies DeniedResult;
+  }
+
+  const supabase = await getServerSupabaseClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();

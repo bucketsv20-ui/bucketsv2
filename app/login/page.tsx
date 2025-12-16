@@ -5,12 +5,14 @@ import { ensureProfileForUser } from "@/src/lib/auth/ensureProfile";
 import { getServerSupabaseClient } from "@/src/lib/supabase/server";
 
 export default async function LoginPage() {
-  const supabase = getServerSupabaseClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseAnon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const supabaseReady = Boolean(supabaseUrl && supabaseAnon);
 
-  if (user) {
+  const supabase = supabaseReady ? await getServerSupabaseClient() : null;
+  const user = supabase ? (await supabase.auth.getUser()).data.user : null;
+
+  if (user && supabase) {
     const profile = await ensureProfileForUser(supabase, user);
     const role = profile?.role ?? "viewer";
     if (role === "admin" || role === "owner") {
@@ -27,7 +29,14 @@ export default async function LoginPage() {
         <Link href="/" className="text-sm text-emerald-300 underline">
           ← Back to home
         </Link>
-        <LoginForm allowSignup={allowSignup} />
+        {supabaseReady ? (
+          <LoginForm allowSignup={allowSignup} />
+        ) : (
+          <div className="bg-slate-900/70 border border-amber-500/40 text-amber-100 rounded-xl p-6 max-w-md w-full text-center space-y-3">
+            <p className="text-lg font-semibold">Supabase configuration missing</p>
+            <p className="text-sm text-amber-100">Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY to enable login.</p>
+          </div>
+        )}
       </div>
     </main>
   );

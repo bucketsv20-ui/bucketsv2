@@ -1,21 +1,33 @@
+import { unstable_noStore as noStore } from "next/cache";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { ensureProfileForUser } from "@/src/lib/auth/ensureProfile";
 import { getServerSupabaseClient } from "@/src/lib/supabase/server";
 import { getServiceSupabaseClient } from "@/src/lib/supabase/service";
 
-export const dynamic = "force-dynamic";
-
 type SearchParams = {
   key?: string;
 };
 
 export default async function BootstrapAdminPage({ searchParams }: { searchParams?: SearchParams }) {
+  noStore();
+
   if (process.env.NODE_ENV === "production") {
     notFound();
   }
 
-  const supabase = getServerSupabaseClient();
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
+    return (
+      <main className="min-h-[60vh] flex items-center justify-center p-6">
+        <div className="max-w-lg w-full rounded-xl border border-amber-500/40 bg-amber-500/10 p-6 text-center space-y-3">
+          <p className="text-lg font-semibold text-amber-100">Supabase config missing</p>
+          <p className="text-sm text-amber-100">Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY to use the bootstrap helper.</p>
+        </div>
+      </main>
+    );
+  }
+
+  const supabase = await getServerSupabaseClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
