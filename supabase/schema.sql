@@ -92,6 +92,11 @@ create table if not exists shot_events (
   unique (season_roster_id, shot_index)
 );
 
+create index if not exists shot_events_season_id_idx on shot_events(season_id);
+create index if not exists shot_events_season_roster_id_idx on shot_events(season_roster_id);
+create index if not exists season_roster_season_player_idx on season_roster(season_id, player_id);
+create index if not exists season_roster_season_team_idx on season_roster(season_id, season_team_id);
+
 create or replace function public.is_admin()
 returns boolean
 language sql
@@ -366,6 +371,147 @@ left join team_totals tt
 
 grant select on v_active_scoreboard_rows to public;
 
+-- Keep BOTH: season history standings/awards + career stats
+
+create or replace view public.v_season_player_standings as
+with player_totals as (
+  select
+    sr.season_id,
+    sr.player_id,
+    sr.season_team_id,
+    sr.tier_id,
+    coalesce(sum(se.points) filter (where se.is_voided = false), 0) as player_points,
+    coalesce(count(se.*) filter (where se.is_voided = false), 0) as player_shots
+  from season_roster sr
+  left join shot_events se on se.season_roster_id = sr.season_roster_id
+  group by sr.season_id, sr.player_id, sr.season_team_id, sr.tier_id
+)
+select
+  pt.season_id,
+  pt.player_id,
+  p.name as player_name,
+  pt.season_team_id,
+  st.team_name,
+  pt.tier_id,
+  t.tier_name,
+  t.color as tier_color,
+  pt.player_points,
+  pt.player_shots,
+  case when pt.player_shots > 0 then round(pt.player_points::numeric / pt.player_shots::numeric, 3) else 0 end as points_per_shot,
+  p.is_hidden as player_is_hidden,
+  dense_rank() over (partition by pt.season_id order by pt.player_points desc) as player_rank
+from player_totals pt
+join players p on p.player_id = pt.player_id
+left join season_teams st on st.season_team_id = pt.season_team_id
+left join tiers t on t.tier_id = pt.tier_id;
+
+grant select on v_season_player_standings to public;
+
+
+create or replace view public.v_season_team_standings as
+with player_totals as (
+  select
+    sr.season_id,
+    sr.player_id,
+    sr.season_team_id,
+    coalesce(sum(se.points) filter (where se.is_voided = false), 0) as player_points,
+    coalesce(count(se.*) filter (where se.is_voided = false), 0) as player_shots
+  from season_roster sr
+  left join shot_events se on se.season_roster_id = sr.season_roster_id
+  group by sr.season_id, sr.player_id, sr.season_team_id
+),
+team_totals as (
+  select
+    season_id,
+    season_team_id,
+    coalesce(sum(player_points), 0) as team_points,
+    coalesce(sum(player_shots), 0) as team_shots
+  from player_totals
+  group by season_id, season_team_id
+),
+free_agents as (
+  select
+    season_id,
+    null::bigint as season_team_id,
+    'Free Agents'::text as team_name,
+    null::int as sort_order,
+    coalesce(sum(player_points), 0) as team_points,
+    coalesce(sum(player_shots), 0) as team_shots
+  from player_totals
+  where season_team_id is null
+  group by season_id
+),
+team_rows as (
+  select
+    st.season_id,
+    st.season_team_id,
+    st.team_name,
+    st.sort_order,
+    coalesce(tt.team_points, 0) as team_points,
+    coalesce(tt.team_shots, 0) as team_shots
+  from season_teams st
+  left join team_totals tt on tt.season_id = st.season_id and tt.season_team_id = st.season_team_id
+  union all
+  select * from free_agents
+)
+select
+  tr.season_id,
+  tr.season_team_id,
+  tr.team_name,
+  tr.sort_order,
+  tr.team_points,
+  tr.team_shots,
+  case when tr.team_shots > 0 then round(tr.team_points::numeric / tr.team_shots::numeric, 3) else 0 end as points_per_shot,
+  dense_rank() over (partition by tr.season_id order by tr.team_points desc) as team_rank
+from team_rows tr;
+
+grant select on v_season_team_standings to public;
+
+
+create or replace view public.v_season_awards as
+with player_stats as (
+  select
+    season_id,
+    player_id,
+    player_name,
+    player_points,
+    player_shots,
+    points_per_shot
+  from v_season_player_standings
+),
+eligible_seasons as (
+  select distinct season_id from player_stats
+),
+award_values as (
+  select
+    es.season_id,
+    (select max(player_points) from player_stats ps where ps.season_id = es.season_id) as mvp_points,
+    (select max(player_shots) from player_stats ps where ps.season_id = es.season_id) as most_shots,
+    (select max(points_per_shot) from player_stats ps where ps.season_id = es.season_id and ps.player_shots >= 10) as best_pps
+  from eligible_seasons es
+)
+select
+  av.season_id,
+  (select array_agg(ps.player_id order by ps.player_id)
+   from player_stats ps
+   where ps.season_id = av.season_id and ps.player_points = av.mvp_points) as mvp_player_ids,
+  av.mvp_points,
+  (select array_agg(ps.player_id order by ps.player_id)
+   from player_stats ps
+   where ps.season_id = av.season_id and ps.player_shots = av.most_shots) as most_shots_player_ids,
+  av.most_shots,
+  (select array_agg(ps.player_id order by ps.player_id)
+   from player_stats ps
+   where ps.season_id = av.season_id and ps.player_shots >= 10 and ps.points_per_shot = av.best_pps) as best_pps_player_ids,
+  av.best_pps
+from award_values av;
+
+grant select on v_season_awards to public;
+
+
+-- NOTE: this is the "main" branch view, kept too.
+-- I adjusted tier breakdown to avoid nested aggregates / grouping errors.
+
 create or replace view public.v_player_career_stats as
 with player_season_summary as (
   select
@@ -426,7 +572,10 @@ team_wins_by_scope as (
     count(distinct pss.season_id) filter (where sw.is_winner) as team_wins
   from player_season_summary pss
   join status_filters sf on pss.status = any(sf.statuses)
-  left join season_winners sw on sw.season_id = pss.season_id and sw.status = pss.status and sw.season_team_key = coalesce(pss.season_team_id, -1)
+  left join season_winners sw
+    on sw.season_id = pss.season_id
+   and sw.status = pss.status
+   and sw.season_team_key = coalesce(pss.season_team_id, -1)
   group by pss.player_id, sf.scope
 ),
 season_mvps as (
@@ -444,29 +593,44 @@ mvps_by_scope as (
     count(distinct pss.season_id) filter (where sm.is_mvp) as mvp_count
   from player_season_summary pss
   join status_filters sf on pss.status = any(sf.statuses)
-  left join season_mvps sm on sm.season_id = pss.season_id and sm.player_id = pss.player_id
+  left join season_mvps sm
+    on sm.season_id = pss.season_id
+   and sm.player_id = pss.player_id
   group by pss.player_id, sf.scope
 ),
-tier_breakdown_by_scope as (
+tier_stats as (
   select
     pss.player_id,
     sf.scope,
-    jsonb_agg(
-      jsonb_build_object(
-        'tier_id', t.tier_id,
-        'tier_name', t.tier_name,
-        'color', t.color,
-        'seasons', count(distinct pss.season_id),
-        'shots', coalesce(sum(pss.season_shots), 0),
-        'points', coalesce(sum(pss.season_points), 0),
-        'pps', case when coalesce(sum(pss.season_shots), 0) > 0 then round(sum(pss.season_points)::numeric / sum(pss.season_shots), 3) else 0 end
-      )
-      order by t.tier_name
-    ) as tier_breakdown
+    t.tier_id,
+    t.tier_name,
+    t.color,
+    count(distinct pss.season_id) as seasons,
+    coalesce(sum(pss.season_shots), 0) as shots,
+    coalesce(sum(pss.season_points), 0) as points
   from player_season_summary pss
   join status_filters sf on pss.status = any(sf.statuses)
   join tiers t on t.tier_id = pss.tier_id
-  group by pss.player_id, sf.scope
+  group by pss.player_id, sf.scope, t.tier_id, t.tier_name, t.color
+),
+tier_breakdown_by_scope as (
+  select
+    player_id,
+    scope,
+    jsonb_agg(
+      jsonb_build_object(
+        'tier_id', tier_id,
+        'tier_name', tier_name,
+        'color', color,
+        'seasons', seasons,
+        'shots', shots,
+        'points', points,
+        'pps', case when shots > 0 then round(points::numeric / shots, 3) else 0 end
+      )
+      order by tier_name
+    ) as tier_breakdown
+  from tier_stats
+  group by player_id, scope
 ),
 last_shots as (
   select player_id, max(last_shot_at) as last_shot_at
@@ -477,42 +641,65 @@ select
   p.player_id,
   p.name,
   p.is_hidden,
+
   coalesce(ab_completed.total_points, 0) as total_points_completed,
   coalesce(ab_completed.total_shots, 0) as total_shots_completed,
-  case when coalesce(ab_completed.total_shots, 0) > 0 then round(ab_completed.total_points::numeric / ab_completed.total_shots, 3) else 0 end as points_per_shot_completed,
+  case when coalesce(ab_completed.total_shots, 0) > 0
+    then round(ab_completed.total_points::numeric / ab_completed.total_shots, 3) else 0 end as points_per_shot_completed,
   coalesce(ab_completed.seasons_played, 0) as seasons_played_completed,
+
   coalesce(ab_active.total_points, 0) as total_points_active_completed,
   coalesce(ab_active.total_shots, 0) as total_shots_active_completed,
-  case when coalesce(ab_active.total_shots, 0) > 0 then round(ab_active.total_points::numeric / ab_active.total_shots, 3) else 0 end as points_per_shot_active_completed,
+  case when coalesce(ab_active.total_shots, 0) > 0
+    then round(ab_active.total_points::numeric / ab_active.total_shots, 3) else 0 end as points_per_shot_active_completed,
   coalesce(ab_active.seasons_played, 0) as seasons_played_active_completed,
+
   coalesce(ab_non_cancelled.total_points, 0) as total_points_non_cancelled,
   coalesce(ab_non_cancelled.total_shots, 0) as total_shots_non_cancelled,
-  case when coalesce(ab_non_cancelled.total_shots, 0) > 0 then round(ab_non_cancelled.total_points::numeric / ab_non_cancelled.total_shots, 3) else 0 end as points_per_shot_non_cancelled,
+  case when coalesce(ab_non_cancelled.total_shots, 0) > 0
+    then round(ab_non_cancelled.total_points::numeric / ab_non_cancelled.total_shots, 3) else 0 end as points_per_shot_non_cancelled,
   coalesce(ab_non_cancelled.seasons_played, 0) as seasons_played_non_cancelled,
+
   coalesce(tw_completed.team_wins, 0) as team_wins_completed,
   coalesce(tw_active.team_wins, 0) as team_wins_active_completed,
   coalesce(tw_non_cancelled.team_wins, 0) as team_wins_non_cancelled,
+
   coalesce(mv_completed.mvp_count, 0) as mvps_completed,
   coalesce(mv_active.mvp_count, 0) as mvps_active_completed,
   coalesce(mv_non_cancelled.mvp_count, 0) as mvps_non_cancelled,
+
   coalesce(tb_completed.tier_breakdown, '[]'::jsonb) as tier_breakdown_completed,
   coalesce(tb_active.tier_breakdown, '[]'::jsonb) as tier_breakdown_active_completed,
   coalesce(tb_non_cancelled.tier_breakdown, '[]'::jsonb) as tier_breakdown_non_cancelled,
+
   ls.last_shot_at
 from players p
-left join aggregated_by_scope ab_completed on ab_completed.player_id = p.player_id and ab_completed.scope = 'completed'
-left join aggregated_by_scope ab_active on ab_active.player_id = p.player_id and ab_active.scope = 'active_completed'
-left join aggregated_by_scope ab_non_cancelled on ab_non_cancelled.player_id = p.player_id and ab_non_cancelled.scope = 'non_cancelled'
-left join team_wins_by_scope tw_completed on tw_completed.player_id = p.player_id and tw_completed.scope = 'completed'
-left join team_wins_by_scope tw_active on tw_active.player_id = p.player_id and tw_active.scope = 'active_completed'
-left join team_wins_by_scope tw_non_cancelled on tw_non_cancelled.player_id = p.player_id and tw_non_cancelled.scope = 'non_cancelled'
-left join mvps_by_scope mv_completed on mv_completed.player_id = p.player_id and mv_completed.scope = 'completed'
-left join mvps_by_scope mv_active on mv_active.player_id = p.player_id and mv_active.scope = 'active_completed'
-left join mvps_by_scope mv_non_cancelled on mv_non_cancelled.player_id = p.player_id and mv_non_cancelled.scope = 'non_cancelled'
-left join tier_breakdown_by_scope tb_completed on tb_completed.player_id = p.player_id and tb_completed.scope = 'completed'
-left join tier_breakdown_by_scope tb_active on tb_active.player_id = p.player_id and tb_active.scope = 'active_completed'
-left join tier_breakdown_by_scope tb_non_cancelled on tb_non_cancelled.player_id = p.player_id and tb_non_cancelled.scope = 'non_cancelled'
-left join last_shots ls on ls.player_id = p.player_id;
+left join aggregated_by_scope ab_completed
+  on ab_completed.player_id = p.player_id and ab_completed.scope = 'completed'
+left join aggregated_by_scope ab_active
+  on ab_active.player_id = p.player_id and ab_active.scope = 'active_completed'
+left join aggregated_by_scope ab_non_cancelled
+  on ab_non_cancelled.player_id = p.player_id and ab_non_cancelled.scope = 'non_cancelled'
+left join team_wins_by_scope tw_completed
+  on tw_completed.player_id = p.player_id and tw_completed.scope = 'completed'
+left join team_wins_by_scope tw_active
+  on tw_active.player_id = p.player_id and tw_active.scope = 'active_completed'
+left join team_wins_by_scope tw_non_cancelled
+  on tw_non_cancelled.player_id = p.player_id and tw_non_cancelled.scope = 'non_cancelled'
+left join mvps_by_scope mv_completed
+  on mv_completed.player_id = p.player_id and mv_completed.scope = 'completed'
+left join mvps_by_scope mv_active
+  on mv_active.player_id = p.player_id and mv_active.scope = 'active_completed'
+left join mvps_by_scope mv_non_cancelled
+  on mv_non_cancelled.player_id = p.player_id and mv_non_cancelled.scope = 'non_cancelled'
+left join tier_breakdown_by_scope tb_completed
+  on tb_completed.player_id = p.player_id and tb_completed.scope = 'completed'
+left join tier_breakdown_by_scope tb_active
+  on tb_active.player_id = p.player_id and tb_active.scope = 'active_completed'
+left join tier_breakdown_by_scope tb_non_cancelled
+  on tb_non_cancelled.player_id = p.player_id and tb_non_cancelled.scope = 'non_cancelled'
+left join last_shots ls
+  on ls.player_id = p.player_id;
 
 grant select on v_player_career_stats to public;
 

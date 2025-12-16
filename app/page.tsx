@@ -18,6 +18,12 @@ export default function HomePage() {
           </Link>
           <Link
             className="rounded-lg bg-slate-800 border border-emerald-500/40 text-emerald-100 font-semibold py-3 px-4 text-center hover:bg-slate-700"
+            href="/history"
+          >
+            View History
+          </Link>
+          <Link
+            className="rounded-lg bg-slate-800 border border-emerald-500/40 text-emerald-100 font-semibold py-3 px-4 text-center hover:bg-slate-700"
             href="/standings"
           >
             View Standings
