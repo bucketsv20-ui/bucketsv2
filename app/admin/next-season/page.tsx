@@ -1,8 +1,17 @@
+import { Suspense } from "react";
 import NextSeasonClientPage from "./NextSeasonClientPage";
 import NotAuthorized from "@/src/components/NotAuthorized";
 import { requireRole } from "@/src/lib/auth/requireRole";
 
-export default async function NextSeasonPage() {
+function CheckingAccess() {
+  return (
+    <div className="p-4 text-sm text-muted-foreground">
+      Checking access…
+    </div>
+  );
+}
+
+async function NextSeasonGate() {
   const result = await requireRole(["admin", "owner"]);
 
   if (!result.allowed) {
@@ -14,4 +23,12 @@ export default async function NextSeasonPage() {
   }
 
   return <NextSeasonClientPage userId={result.user.id} />;
+}
+
+export default function NextSeasonPage() {
+  return (
+    <Suspense fallback={<CheckingAccess />}>
+      <NextSeasonGate />
+    </Suspense>
+  );
 }
