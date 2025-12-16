@@ -3,7 +3,6 @@ import CurrentSeasonClientPage from "./CurrentSeasonClientPage";
 import NotAuthorized from "@/src/components/NotAuthorized";
 import { requireRole } from "@/src/lib/auth/requireRole";
 
-export const dynamic = "force-dynamic";
 
 function CheckingAccess() {
   return (
