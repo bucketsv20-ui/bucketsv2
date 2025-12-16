@@ -219,11 +219,12 @@ export default function SeasonHistoryPage() {
     if (error || !data) {
       setStatus("Unable to load seasons.");
       setSeasons([]);
+      setSelectedSeasonId(null);
       return;
     }
 
     setSeasons(data as SeasonMeta[]);
-    setStatus("");
+    setStatus(data.length === 0 ? "No seasons found." : "");
 
     const mostRecentCompleted = (data as SeasonMeta[]).find((s) => s.status === "completed");
     const nextSelection = mostRecentCompleted?.season_id ?? (data[0]?.season_id ?? null);
@@ -236,13 +237,17 @@ export default function SeasonHistoryPage() {
       setLoading(true);
       setStatus("Loading season summary...");
 
+      const basePlayerQuery = client
+        .from("v_season_player_standings")
+        .select(
+          "season_id, player_id, player_name, season_team_id, team_name, tier_id, tier_name, tier_color, player_points, player_shots, points_per_shot, player_rank, player_is_hidden",
+        )
+        .eq("season_id", seasonId);
+
+      const playerQuery = includeHiddenPlayers ? basePlayerQuery : basePlayerQuery.eq("player_is_hidden", false);
+
       const [playerRes, teamRes, awardsRes] = await Promise.all([
-        client
-          .from("v_season_player_standings")
-          .select(
-            "season_id, player_id, player_name, season_team_id, team_name, tier_id, tier_name, tier_color, player_points, player_shots, points_per_shot, player_rank, player_is_hidden",
-          )
-          .eq("season_id", seasonId),
+        playerQuery,
         client
           .from("v_season_team_standings")
           .select("season_id, season_team_id, team_name, sort_order, team_points, team_shots, points_per_shot, team_rank")
@@ -280,7 +285,7 @@ export default function SeasonHistoryPage() {
       setStatus("");
       setLoading(false);
     },
-    [client],
+    [client, includeHiddenPlayers],
   );
 
   useEffect(() => {
