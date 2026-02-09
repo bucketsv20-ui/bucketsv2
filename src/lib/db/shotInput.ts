@@ -42,6 +42,7 @@ type DiceFaceRow = {
 export type RecordShotInput = {
   seasonPlayerId: string;
   selectedDie: number;
+  rolledDice?: [number, number] | null;
   isDouble: boolean;
   isWaiver: boolean;
 };
@@ -200,6 +201,7 @@ export async function recordShot(client: SupabaseClient, input: RecordShotInput)
   const { data, error } = await client.rpc("record_shot", {
     p_season_player_id: input.seasonPlayerId,
     p_selected_die: input.selectedDie,
+    p_rolled_dice: input.rolledDice ?? null,
     p_is_double: input.isDouble,
     p_is_waiver: input.isWaiver,
   });

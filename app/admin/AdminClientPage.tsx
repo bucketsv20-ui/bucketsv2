@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getSupabaseClient } from "@/src/lib/supabaseClient";
+import DiceRoller from "@/src/components/DiceRoller";
 import {
   loadActiveDiceFaces,
   loadActiveSeasonContext,
@@ -33,6 +34,8 @@ export default function AdminClientPage() {
   const [selectedSeasonPlayerId, setSelectedSeasonPlayerId] = useState<string>("");
   const [diceFaces, setDiceFaces] = useState<DieFaceOption[]>([]);
   const [selectedDie, setSelectedDie] = useState(1);
+  const [rolledDice, setRolledDice] = useState<[number, number] | null>(null);
+  const [hasAppliedRoll, setHasAppliedRoll] = useState(false);
   const [isDouble, setIsDouble] = useState(false);
   const [isWaiver, setIsWaiver] = useState(false);
   const [recentShots, setRecentShots] = useState<RecentShot[]>([]);
@@ -78,6 +81,8 @@ export default function AdminClientPage() {
     setDiceFaces(faces);
     setSelectedSeasonPlayerId((prev) => prev || players[0]?.seasonPlayerId || "");
     setSelectedDie((prev) => (faces.some((face) => face.dieValue === prev) ? prev : faces[0]?.dieValue ?? 1));
+    setRolledDice(null);
+    setHasAppliedRoll(false);
     setStatus("");
   }, [client]);
 
@@ -122,6 +127,7 @@ export default function AdminClientPage() {
     const { error } = await recordShot(client, {
       seasonPlayerId: selectedSeasonPlayer.seasonPlayerId,
       selectedDie,
+      rolledDice,
       isDouble,
       isWaiver,
     });
@@ -133,6 +139,8 @@ export default function AdminClientPage() {
     }
 
     setStatus("Shot recorded.");
+    setHasAppliedRoll(false);
+    setRolledDice(null);
     setSaving(false);
     await refresh();
     await refreshRecentShots();
@@ -166,17 +174,31 @@ export default function AdminClientPage() {
             </select>
           </label>
 
-          <label className="space-y-1 text-sm">
-            <span className="text-slate-300">Die roll</span>
-            <select className="w-full rounded border border-slate-700 bg-slate-900 p-2" value={selectedDie} onChange={(e) => setSelectedDie(Number(e.target.value))}>
-              {diceFaces.map((face) => (
-                <option key={face.dieValue} value={face.dieValue}>
-                  {face.dieValue}
-                </option>
-              ))}
-            </select>
-          </label>
+          <div className="space-y-1 text-sm">
+            <span className="text-slate-300">Applied die</span>
+            <div className="rounded border border-slate-700 bg-slate-900 p-2 font-semibold text-emerald-200">{selectedDie}</div>
+          </div>
         </div>
+
+        <DiceRoller
+          disabled={!selectedSeasonPlayer}
+          onApply={(nextSelectedDie, nextRolledDice) => {
+            if (!nextRolledDice.includes(nextSelectedDie)) {
+              setStatus("Selected die must match one of the two rolled dice.");
+              return;
+            }
+
+            if (!diceFaces.some((face) => face.dieValue === nextSelectedDie)) {
+              setStatus("The selected die does not map to the active dice set.");
+              return;
+            }
+
+            setSelectedDie(nextSelectedDie);
+            setRolledDice(nextRolledDice);
+            setHasAppliedRoll(true);
+            setStatus("");
+          }}
+        />
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 rounded border border-slate-800 p-3 text-sm text-slate-200">
           <div>
@@ -211,7 +233,7 @@ export default function AdminClientPage() {
         <button
           type="submit"
           className="rounded bg-emerald-500 px-4 py-2 font-medium text-slate-900 disabled:cursor-not-allowed disabled:bg-slate-600"
-          disabled={!selectedSeasonPlayer || saving || selectedSeasonPlayer.shotsRemaining <= 0 || !selectedFace}
+          disabled={!selectedSeasonPlayer || saving || selectedSeasonPlayer.shotsRemaining <= 0 || !selectedFace || !hasAppliedRoll}
         >
           {saving ? "Saving..." : "Submit shot"}
         </button>
