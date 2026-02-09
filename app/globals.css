@@ -17,3 +17,63 @@ a {
 input, select, textarea, button {
   @apply text-slate-900;
 }
+
+.dice-cube {
+  width: 84px;
+  height: 84px;
+  border-radius: 16px;
+  background: radial-gradient(circle at 30% 30%, #f8fafc 0%, #e2e8f0 60%, #cbd5e1 100%);
+  border: 2px solid rgba(15, 23, 42, 0.3);
+  box-shadow: 0 16px 22px rgba(2, 6, 23, 0.5), inset 0 3px 8px rgba(255, 255, 255, 0.65);
+  transform-style: preserve-3d;
+}
+
+.dice-cube-rolling {
+  animation: dice-tumble 780ms cubic-bezier(0.2, 0.7, 0.2, 1) infinite;
+}
+
+.dice-cube-rolling.die-1 {
+  animation-delay: 90ms;
+}
+
+.dice-face {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+  padding: 10px;
+}
+
+.dice-pip {
+  width: 13px;
+  height: 13px;
+  border-radius: 999px;
+  background: #0f172a;
+  box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.4);
+  justify-self: center;
+  align-self: center;
+}
+
+.pip-top-left { grid-column: 1; grid-row: 1; }
+.pip-top-right { grid-column: 3; grid-row: 1; }
+.pip-middle-left { grid-column: 1; grid-row: 2; }
+.pip-middle-right { grid-column: 3; grid-row: 2; }
+.pip-center { grid-column: 2; grid-row: 2; }
+.pip-bottom-left { grid-column: 1; grid-row: 3; }
+.pip-bottom-right { grid-column: 3; grid-row: 3; }
+
+@keyframes dice-tumble {
+  0% {
+    transform: rotateX(0deg) rotateY(0deg) rotateZ(0deg) scale(1);
+  }
+  30% {
+    transform: rotateX(220deg) rotateY(150deg) rotateZ(120deg) translateY(-8px) scale(1.04);
+  }
+  60% {
+    transform: rotateX(420deg) rotateY(280deg) rotateZ(210deg) translateY(-3px) scale(1.02);
+  }
+  100% {
+    transform: rotateX(540deg) rotateY(360deg) rotateZ(280deg) scale(1);
+  }
+}

@@ -13,6 +13,25 @@ function randomDie(): number {
   return (randomArray[0] % 6) + 1;
 }
 
+const pipLayouts: Record<number, string[]> = {
+  1: ["center"],
+  2: ["top-left", "bottom-right"],
+  3: ["top-left", "center", "bottom-right"],
+  4: ["top-left", "top-right", "bottom-left", "bottom-right"],
+  5: ["top-left", "top-right", "center", "bottom-left", "bottom-right"],
+  6: ["top-left", "top-right", "middle-left", "middle-right", "bottom-left", "bottom-right"],
+};
+
+function DieFace({ value }: { value: number }) {
+  return (
+    <div className="dice-face">
+      {pipLayouts[value]?.map((position) => (
+        <span key={`${value}-${position}`} className={`dice-pip pip-${position}`} />
+      ))}
+    </div>
+  );
+}
+
 export default function DiceRoller({ onApply, disabled = false }: DiceRollerProps) {
   const [isRolling, setIsRolling] = useState(false);
   const [displayDice, setDisplayDice] = useState<[number, number]>([1, 1]);
@@ -87,10 +106,15 @@ export default function DiceRoller({ onApply, disabled = false }: DiceRollerProp
                 isSelected
                   ? "border-emerald-300 bg-emerald-400/20 shadow-[0_0_24px_rgba(52,211,153,0.35)]"
                   : "border-slate-700 bg-slate-900/80 hover:border-indigo-300"
-              } ${isRolling ? "animate-pulse" : ""}`}
+              }`}
             >
               <p className="text-xs uppercase tracking-wide text-slate-400">Die {index === 0 ? "A" : "B"}</p>
-              <p className="mt-2 text-4xl font-black text-white">{value}</p>
+              <div className="mt-2 flex items-center justify-center [perspective:800px]">
+                <div className={`dice-cube ${isRolling ? `dice-cube-rolling die-${index}` : ""}`}>
+                  <DieFace value={value} />
+                </div>
+              </div>
+              <p className="mt-2 text-center text-xs font-semibold text-indigo-100">Value: {value}</p>
             </button>
           );
         })}
