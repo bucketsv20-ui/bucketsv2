@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getSupabaseClient } from "@/src/lib/supabaseClient";
+import DiceRoller from "@/src/components/DiceRoller";
 import {
   createPlayer,
   createSeason,
@@ -60,6 +61,7 @@ export default function AdminClientPage() {
 
   const [selectedSeasonPlayerId, setSelectedSeasonPlayerId] = useState("");
   const [selectedDie, setSelectedDie] = useState(1);
+  const [rolledDice, setRolledDice] = useState<[number, number] | null>(null);
   const [basePoints, setBasePoints] = useState<1 | 2>(1);
   const [isDouble, setIsDouble] = useState(false);
   const [isMoneyball, setIsMoneyball] = useState(false);
@@ -69,6 +71,10 @@ export default function AdminClientPage() {
     () => seasonPlayers.find((sp) => sp.id === selectedSeasonPlayerId) ?? null,
     [seasonPlayers, selectedSeasonPlayerId],
   );
+
+  useEffect(() => {
+    setRolledDice(null);
+  }, [selectedSeasonPlayerId]);
 
   const playerScores = useMemo(() => {
     const map: ScoreById = {};
@@ -426,7 +432,7 @@ export default function AdminClientPage() {
               <section className="rounded border border-slate-700 p-4 space-y-3">
                 <h2 className="font-semibold text-emerald-100">5) Shot Input + Live Validation</h2>
                 <form
-                  className="grid md:grid-cols-6 gap-2"
+                  className="grid md:grid-cols-5 gap-2"
                   onSubmit={(e) => {
                     e.preventDefault();
                     if (!leagueId || !selectedSeasonPlayer || !activeSeason) return;
@@ -436,6 +442,7 @@ export default function AdminClientPage() {
                         seasonId: activeSeason.id,
                         seasonPlayer: selectedSeasonPlayer,
                         selectedDie,
+                        rolledDice,
                         basePoints,
                         isDouble,
                         isMoneyball,
@@ -445,6 +452,7 @@ export default function AdminClientPage() {
                         return;
                       }
                       setIsDouble(false);
+                      setRolledDice(null);
                       await refreshSeasonScoped();
                     });
                   }}
@@ -453,11 +461,6 @@ export default function AdminClientPage() {
                     <option value="">Season player</option>
                     {seasonPlayers.map((sp) => (
                       <option key={sp.id} value={sp.id}>{sp.player_name}</option>
-                    ))}
-                  </select>
-                  <select className="rounded bg-slate-900 border border-slate-700 p-2" value={selectedDie} onChange={(e) => setSelectedDie(Number(e.target.value))}>
-                    {[1, 2, 3, 4, 5, 6].map((die) => (
-                      <option key={die} value={die}>{die}</option>
                     ))}
                   </select>
                   <select className="rounded bg-slate-900 border border-slate-700 p-2" value={basePoints} onChange={(e) => setBasePoints(Number(e.target.value) as 1 | 2)}>
@@ -469,9 +472,19 @@ export default function AdminClientPage() {
                   <button className="rounded bg-emerald-500 text-slate-900 font-medium px-3 py-2 disabled:bg-slate-700" disabled={!selectedSeasonPlayer || selectedSeasonPlayer.shots_remaining <= 0 || saving}>Take shot</button>
                 </form>
 
+
+
+                <DiceRoller
+                  disabled={!selectedSeasonPlayer || selectedSeasonPlayer.shots_remaining <= 0 || saving}
+                  onApply={({ selectedDie: die, rolledDice: dice }) => {
+                    setSelectedDie(die);
+                    setRolledDice(dice);
+                    setStatus(`Selected die ${die} from roll [${dice[0]}, ${dice[1]}].`);
+                  }}
+                />
                 {selectedSeasonPlayer && (
                   <p className="text-sm text-slate-300">
-                    Player score: {playerScores[selectedSeasonPlayer.id] ?? 0} · Team score: {selectedSeasonPlayer.team_id ? teamScores[selectedSeasonPlayer.team_id] ?? 0 : "N/A"} · Shots remaining: {selectedSeasonPlayer.shots_remaining}
+                    Player score: {playerScores[selectedSeasonPlayer.id] ?? 0} · Team score: {selectedSeasonPlayer.team_id ? teamScores[selectedSeasonPlayer.team_id] ?? 0 : "N/A"} · Shots remaining: {selectedSeasonPlayer.shots_remaining} · Selected die: {selectedDie}{rolledDice ? ` (from ${rolledDice[0]}, ${rolledDice[1]})` : ""}
                   </p>
                 )}
 
@@ -483,6 +496,7 @@ export default function AdminClientPage() {
                       <li key={shot.id} className="rounded border border-slate-800 p-2">
                         #{shot.shot_number} · {player?.player_name ?? "Player"} · die {shot.selected_die} · {shot.base_points}
                         {shot.is_double ? " x2" : ""} = {shot.points_awarded} pts
+                        {shot.rolled_dice?.length === 2 ? ` · rolled [${shot.rolled_dice[0]}, ${shot.rolled_dice[1]}]` : ""}
                         {shot.is_moneyball ? " · moneyball" : ""}
                         {teamName ? ` · team ${teamName}` : ""}
                       </li>

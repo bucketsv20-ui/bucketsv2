@@ -49,6 +49,7 @@ export type ShotEvent = {
   team_id: string | null;
   shot_number: number;
   selected_die: number;
+  rolled_dice: number[] | null;
   base_points: number;
   points_awarded: number;
   is_double: boolean;
@@ -188,7 +189,7 @@ export async function upsertSeasonPlayer(client: SupabaseClient, input: {
 export async function loadShotEvents(client: SupabaseClient, seasonId: string) {
   return client
     .from("shot_events")
-    .select("id, season_player_id, team_id, shot_number, selected_die, base_points, points_awarded, is_double, is_moneyball, occurred_at")
+    .select("id, season_player_id, team_id, shot_number, selected_die, rolled_dice, base_points, points_awarded, is_double, is_moneyball, occurred_at")
     .eq("season_id", seasonId)
     .eq("is_voided", false)
     .order("occurred_at", { ascending: false })
@@ -200,11 +201,20 @@ export async function createShot(client: SupabaseClient, input: {
   seasonId: string;
   seasonPlayer: SeasonPlayer;
   selectedDie: number;
+  rolledDice: [number, number] | null;
   basePoints: 1 | 2;
   isDouble: boolean;
   isMoneyball: boolean;
 }) {
   const pointsAwarded = input.basePoints * (input.isDouble ? 2 : 1);
+
+  if (input.selectedDie < 1 || input.selectedDie > 6) {
+    return { error: "Selected die must be between 1 and 6." };
+  }
+
+  if (input.rolledDice && !input.rolledDice.includes(input.selectedDie)) {
+    return { error: "Selected die must match one of the rolled dice values." };
+  }
 
   if (input.seasonPlayer.shots_remaining <= 0) {
     return { error: "No shots remaining for this player." };
@@ -232,6 +242,7 @@ export async function createShot(client: SupabaseClient, input: {
     tier_id: input.seasonPlayer.tier_id,
     shot_number: shotNumber,
     selected_die: input.selectedDie,
+    rolled_dice: input.rolledDice,
     base_points: input.basePoints,
     is_double: input.isDouble,
     is_moneyball: input.isMoneyball,
