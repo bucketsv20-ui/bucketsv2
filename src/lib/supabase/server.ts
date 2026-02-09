@@ -7,14 +7,12 @@ export async function getServerSupabaseClient() {
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
   if (!supabaseUrl || !supabaseAnonKey) {
-    throw new Error(
-      "Missing Supabase environment variables. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY."
-    );
+    throw new Error("Missing Supabase environment variables.");
   }
 
   const cookieStore = await cookies();
 
-  return createServerClient(supabaseUrl, supabaseAnonKey, {
+  return createServerClient<any>(supabaseUrl, supabaseAnonKey, {
     cookies: {
       get(name: string) {
         return cookieStore.get(name)?.value;
@@ -22,16 +20,12 @@ export async function getServerSupabaseClient() {
       set(name: string, value: string, options?: CookieOptions) {
         try {
           cookieStore.set({ name, value, ...(options ?? {}) });
-        } catch {
-          // Ignore if called during Server Component render
-        }
+        } catch {}
       },
       remove(name: string, options?: CookieOptions) {
         try {
           cookieStore.set({ name, value: "", maxAge: 0, ...(options ?? {}) });
-        } catch {
-          // Ignore if called during Server Component render
-        }
+        } catch {}
       },
     },
   });
