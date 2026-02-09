@@ -29,12 +29,21 @@ export default function AdminClientPage() {
   const [shotEvents, setShotEvents] = useState<ShotEvent[]>([]);
   const [selectedPlayer, setSelectedPlayer] = useState<PlayerWithTier | null>(null);
 
+  const toUserMessage = (errorText?: string | null) => {
+    if (!errorText) return "Unable to load admin data.";
+    if (errorText.toLowerCase().includes("failed to fetch") || errorText.toLowerCase().includes("typeerror")) {
+      return "Unable to connect to Supabase right now. Check your NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY and network access.";
+    }
+    return errorText;
+  };
+
   const loadAdminData = useCallback(async () => {
     if (!client) return;
 
-    const { data: leagueContext, error: leagueError } = await loadLeagueContext(client);
+    try {
+      const { data: leagueContext, error: leagueError } = await loadLeagueContext(client);
     if (leagueError || !leagueContext) {
-      setStatus(leagueError ?? "Unable to load league context.");
+      setStatus(toUserMessage(leagueError));
       return;
     }
 
@@ -44,7 +53,7 @@ export default function AdminClientPage() {
     ]);
 
     if (seasonsRes.error || seasonTiersRes.error) {
-      setStatus(seasonsRes.error?.message ?? seasonTiersRes.error?.message ?? "Failed loading season metadata.");
+      setStatus(toUserMessage(seasonsRes.error?.message ?? seasonTiersRes.error?.message));
       return;
     }
 
@@ -67,7 +76,7 @@ export default function AdminClientPage() {
     ]);
 
     if (seasonPlayersRes.error || shotEventsRes.error) {
-      setStatus(seasonPlayersRes.error?.message ?? shotEventsRes.error?.message ?? "Failed loading active season data.");
+      setStatus(toUserMessage(seasonPlayersRes.error?.message ?? shotEventsRes.error?.message));
       return;
     }
 
@@ -110,6 +119,10 @@ export default function AdminClientPage() {
     setPlayers(mappedPlayers);
     setShotEvents((shotEventsRes.data ?? []) as ShotEvent[]);
     setStatus("");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to load admin data.";
+      setStatus(toUserMessage(message));
+    }
   }, [client]);
 
   useEffect(() => {
@@ -128,9 +141,12 @@ export default function AdminClientPage() {
 
   return (
     <section className="space-y-5">
-      <header>
-        <h1 className="text-2xl font-semibold text-emerald-200">Admin</h1>
-        <p className="text-sm text-slate-300">{activeSeason ? `Current season: ${activeSeason.name}` : "Current season unavailable"}</p>
+      <header className="flex items-center justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold text-emerald-200">Admin</h1>
+          <p className="text-sm text-slate-300">{activeSeason ? `Current season: ${activeSeason.name}` : "Current season unavailable"}</p>
+        </div>
+        <button type="button" onClick={() => void loadAdminData()} className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 hover:bg-slate-800">Refresh</button>
       </header>
 
       {status && <div className="rounded-lg border border-slate-700 bg-slate-900 p-3 text-sm text-slate-200">{status}</div>}
