@@ -1,39 +1,77 @@
-# Buckets Scoreboard
+# Team Shot Scoring Management
 
-Buckets is a minimal two-screen web app for recording TV-style basketball scoring. The admin page records shots via a Supabase RPC and the standings page shows a realtime leaderboard for the active season.
+Next.js App Router + Supabase app for leagues, seasons, teams, players, shot logging, analytics, and admin integrity workflows.
 
-## Prerequisites
-- Node.js 18+
-- A Supabase project
+## Architecture & Folder Structure
 
-## Set up the database
-1. Open the Supabase SQL Editor.
-2. Run `supabase/schema.sql` to create tables, functions, views, and RLS policies.
-3. Run `supabase/seed.sql` to create a demo active season with teams, players, and a few shots.
+- `app/(auth)` auth and onboarding routes.
+- `app/(dashboard)` league, season, scoreboard, players, teams, admin routes.
+- `app/api/*` mutation/query handlers (league create, shot write, admin writes).
+- `src/lib/supabase/*` typed server/browser/service Supabase clients.
+- `src/lib/data/*` server-side typed query layer.
+- `src/lib/validation/*` Zod schemas for forms and API payload validation.
+- `src/providers/*` client providers (TanStack Query).
+- `src/types/database.ts` generated-like database shape for end-to-end typing.
+- `docs/schema-to-product-map.md` schema-to-product mapping and role strategy.
 
-## Configure the app
-1. Copy `.env.example` to `.env.local` and fill in your Supabase project URL and anon (publishable) key.
-   ```bash
-   cp .env.example .env.local
-   ```
-2. Install dependencies and start the dev server:
-   ```bash
-   npm install
-   npm run dev
-   ```
-3. Visit:
-   - `/admin` to record shots (base 0/1/2, optional double, automatic moneyball every 10th shot).
-   - `/standings` to show the TV view that refetches standings whenever `shot_events` change.
-   - `/login` to sign in with Supabase email/password auth.
+## Page Map (Routes)
 
-## Authentication & roles
-- Users sign in via `/login`. The global header displays the current user, role badge, and logout action.
-- Profiles are auto-created via a trigger on `auth.users` and include `display_name` and `role` (viewer/admin/owner). A fallback insert also runs after login.
-- Admin-only pages (`/admin` and `/admin/next-season`) enforce roles server-side.
-- Optional self-signup can be toggled with `NEXT_PUBLIC_ENABLE_SIGNUP=true` (disabled by default).
-- Local dev admin: set `ADMIN_BOOTSTRAP_KEY` and `SUPABASE_SERVICE_ROLE_KEY`, then visit `/dev/bootstrap-admin?key=...` while signed in to promote your account to admin. This route is disabled in production.
+- `/` landing
+- `/login` magic link sign-in
+- `/onboarding` create first league/profile flow
+- `/league/[leagueId]/dashboard` league command center
+- `/league/[leagueId]/season/[seasonId]` season overview
+- `/league/[leagueId]/season/[seasonId]/scoreboard` realtime-ish shot entry + scoreboard polling
+- `/players/[playerId]` player detail (career + seasonal + XP)
+- `/teams/[teamId]` team detail + season performance
+- `/admin` admin tools index
+- `/admin/data-integrity` full-table integrity workspace
 
-## Notes
-- RLS allows public read access to standings data. Any user can insert new shots via `record_shot`, while only admins (profiles.role `admin` or `owner`) can update existing `shot_events` (e.g., voiding).
-- The `record_shot` RPC computes shot_index, moneyball multiplier, and points atomically and validates that the roster belongs to an active season.
-- The view `v_active_scoreboard_rows` powers the standings page and uses manual overrides when present.
+## Data Fetching Strategy
+
+- Protected reads are server-side by default using server Supabase client.
+- Shot scoreboard uses TanStack Query polling (`refetchInterval`) for smooth updates.
+- API routes enforce validation with Zod and season-status guardrails.
+
+## Dev
+
+```bash
+npm install
+npm run dev
+npm run lint
+```
+
+Required env:
+
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY` (optional admin scripts)
+
+## Database Utilization Report
+
+| Table | Features/pages | CRUD |
+|---|---|---|
+| leagues | onboarding + league dashboard | C/R |
+| profiles | auth profile bootstrap | C/R/U |
+| league_memberships | onboarding + role checks + admin write tool | C/R/U/D*
+| seasons | season pages/admin | C/R/U/D*
+| teams | team pages/admin | C/R/U/D*
+| tiers | season assignment/admin | C/R/U/D*
+| players | player detail/admin | C/R/U/D*
+| season_players | season roster, scoreboard | C/R/U/D*
+| season_player_assignments | season query + admin correction tool | C/R/U/D*
+| season_player_allowance_events | shot logging + allowance timeline | C/R/U/D*
+| season_player_stats | scoreboard + season analytics | C/R/U*
+| season_team_stats | team analytics | R/U*
+| player_career_stats | player analytics | R/U*
+| season_results | season outcomes | C/R/U/D*
+| season_awards | season awards | C/R/U/D*
+| player_xp_awards | player XP breakdown | C/R/U/D*
+| season_teams | season setup | C/R/U/D*
+| season_tiers | season setup | C/R/U/D*
+| bottle_types | scoring config | C/R/U/D*
+| dice_sets | scoring config | C/R/U/D*
+| dice_set_faces | scoring config | C/R/U/D*
+| shot_events | shot entry + scoreboard + history | C/R/U/D*
+
+`*` Admin integrity workspace supports controlled inserts/corrections for those entities.

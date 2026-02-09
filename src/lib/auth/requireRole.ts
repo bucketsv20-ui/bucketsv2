@@ -1,53 +1,20 @@
-import type { User } from "@supabase/supabase-js";
 import { getServerSupabaseClient } from "@/src/lib/supabase/server";
-import { ensureProfileForUser } from "./ensureProfile";
 
-export type Role = "viewer" | "admin" | "owner";
+export type Role = "owner" | "admin" | "member";
 
-type AllowedResult = {
-  allowed: true;
-  user: User;
-  profile: {
-    id: string;
-    display_name: string;
-    role: Role;
-  };
-};
-
-type DeniedResult = {
-  allowed: false;
-  reason: "not_authenticated" | "missing_profile" | "forbidden" | "missing_env";
-  user?: User;
-  profile?: {
-    id: string;
-    display_name: string;
-    role: Role;
-  } | null;
-};
-
-export async function requireRole(roles: Role[]): Promise<AllowedResult | DeniedResult> {
-  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
-    return { allowed: false, reason: "missing_env" } satisfies DeniedResult;
-  }
-
+export async function requireRole(leagueId: string, roles: Role[]) {
   const supabase = await getServerSupabaseClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const { data: auth } = await supabase.auth.getUser();
+  if (!auth.user) return { allowed: false as const, reason: "not_authenticated" };
 
-  if (!user) {
-    return { allowed: false, reason: "not_authenticated" } satisfies DeniedResult;
-  }
+  const { data: membership } = await supabase
+    .from("league_memberships")
+    .select("role,is_active")
+    .eq("league_id", leagueId)
+    .eq("user_id", auth.user.id)
+    .maybeSingle();
 
-  const profile = await ensureProfileForUser(supabase, user);
-
-  if (!profile) {
-    return { allowed: false, reason: "missing_profile", user } satisfies DeniedResult;
-  }
-
-  if (!roles.includes(profile.role as Role)) {
-    return { allowed: false, reason: "forbidden", user, profile: profile as AllowedResult["profile"] } satisfies DeniedResult;
-  }
-
-  return { allowed: true, user, profile: profile as AllowedResult["profile"] } satisfies AllowedResult;
+  if (!membership?.is_active) return { allowed: false as const, reason: "missing_membership" };
+  if (!roles.includes(membership.role)) return { allowed: false as const, reason: "forbidden" };
+  return { allowed: true as const, role: membership.role };
 }
