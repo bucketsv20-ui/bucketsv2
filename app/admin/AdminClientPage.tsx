@@ -1,438 +1,199 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Menu } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { getSupabaseClient } from "@/src/lib/supabaseClient";
+import { loadRecentShots, resolveShotInputContext, submitShotEvent, type ShotInputContext } from "@/src/lib/db/shotInput";
 
-const defaultPointsRules = {
-  base_values: [0, 1, 2],
-  multipliers: [1, 2],
-  moneyball_every: 10,
+type RecentShot = {
+  id: string;
+  shot_number: number;
+  selected_die: number;
+  base_points: number;
+  is_double: boolean;
+  is_moneyball: boolean;
+  points_awarded: number;
+  occurred_at: string;
 };
-
-type ActiveSeason = {
-  season_id: number;
-  season_name: string;
-};
-
-type RosterEntry = {
-  season_roster_id: number;
-  player_name: string;
-  team_name: string | null;
-  tier_name: string | null;
-};
-
-type ShotLogRow = {
-  shot_id: number;
-  shot_index: number;
-  base_value: number;
-  multiplier: number;
-  points: number;
-  taken_at: string;
-  note: string | null;
-  player_name: string;
-  team_name: string | null;
-};
-
-type PointsRules = typeof defaultPointsRules;
-
-function useSupabaseMemo() {
-  return useMemo(() => getSupabaseClient(), []);
-}
 
 export default function AdminClientPage() {
-  const { client, error: envError } = useSupabaseMemo();
-  const [activeSeason, setActiveSeason] = useState<ActiveSeason | null>(null);
-  const [roster, setRoster] = useState<RosterEntry[]>([]);
-  const [selectedRosterId, setSelectedRosterId] = useState<number | null>(null);
-  const [baseValue, setBaseValue] = useState(2);
-  const [multiplier, setMultiplier] = useState(1);
-  const [note, setNote] = useState("");
-  const [shotLog, setShotLog] = useState<ShotLogRow[]>([]);
-  const [status, setStatus] = useState<string>("");
-  const [loading, setLoading] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [pointsRules, setPointsRules] = useState<PointsRules>(defaultPointsRules);
-  const menuRef = useRef<HTMLDivElement | null>(null);
-  const navigationLinks = useMemo(
-    () => [
-      { label: "Admin", href: "/admin" },
-      { label: "Current Season Settings", href: "/admin/current-season" },
-      { label: "Standings", href: "/standings" },
-      { label: "Stats / Analytics", href: "/stats" },
-      { label: "Next Season Settings", href: "/admin/next-season" },
-    ],
-    [],
-  );
+  const { client, error: envError } = useMemo(() => getSupabaseClient(), []);
+  const [context, setContext] = useState<ShotInputContext | null>(null);
+  const [selectedDie, setSelectedDie] = useState(1);
+  const [basePoints, setBasePoints] = useState<1 | 2 | 4 | 8>(1);
+  const [isDouble, setIsDouble] = useState(false);
+  const [isMoneyball, setIsMoneyball] = useState(false);
+  const [recentShots, setRecentShots] = useState<RecentShot[]>([]);
+  const [status, setStatus] = useState("Loading current context...");
+  const [saving, setSaving] = useState(false);
 
-  const loadRoster = useCallback(
-    async (seasonId: number) => {
-      if (!client) return;
-      const { data, error } = await client
-        .from("season_roster")
-        .select(
-          "season_roster_id, season_id, player:players(name), season_team:season_teams(team_name), tier:tiers(tier_name)",
-        )
-        .eq("season_id", seasonId)
-        .eq("is_active", true)
-        .order("season_team_id", { ascending: true, nullsFirst: true })
-        .order("season_roster_id", { ascending: true });
-
-      if (error || !data) {
-        setStatus("Unable to load roster. Check Supabase tables and RLS policies.");
-        return;
-      }
-
-      type SupabaseRosterRow = {
-        season_roster_id: number;
-        season_id: number;
-        player?: { name?: string | null } | null;
-        season_team?: { team_name?: string | null } | null;
-        tier?: { tier_name?: string | null } | null;
-      };
-
-      const mapped: RosterEntry[] = ((data ?? []) as SupabaseRosterRow[]).map((row) => ({
-        season_roster_id: row.season_roster_id,
-        player_name: row.player?.name ?? "Player",
-        team_name: row.season_team?.team_name ?? null,
-        tier_name: row.tier?.tier_name ?? null,
-      }));
-
-      setRoster(mapped);
-      setSelectedRosterId((current) => current ?? mapped[0]?.season_roster_id ?? null);
-    },
-    [client],
-  );
-
-  const loadSeasonSettings = useCallback(
-    async (seasonId: number) => {
-      if (!client) return;
-      const { data } = await client.from("season_settings").select("points_rules").eq("season_id", seasonId).maybeSingle();
-
-      const rules = data?.points_rules as PointsRules | undefined;
-      const allowedBaseValues = rules?.base_values?.filter((value) => [0, 1, 2].includes(value));
-      const allowedMultipliers = rules?.multipliers?.filter((value) => [1, 2].includes(value));
-
-      const safeRules: PointsRules = {
-        base_values: allowedBaseValues?.length ? allowedBaseValues : defaultPointsRules.base_values,
-        multipliers: allowedMultipliers?.length ? allowedMultipliers : defaultPointsRules.multipliers,
-        moneyball_every: rules?.moneyball_every ?? defaultPointsRules.moneyball_every,
-      };
-
-      setPointsRules(safeRules);
-      setBaseValue((current) => (safeRules.base_values.includes(current) ? current : safeRules.base_values[0]));
-      setMultiplier((current) => (safeRules.multipliers.includes(current) ? current : safeRules.multipliers[0]));
-    },
-    [client],
-  );
-
-  const loadShotLog = useCallback(
-    async (seasonId: number) => {
-      if (!client) return;
-      const { data, error } = await client
-        .from("shot_events")
-        .select(
-          "shot_id, shot_index, base_value, multiplier, points, taken_at, note, season_roster(season_roster_id, player:players(name), season_team:season_teams(team_name))",
-        )
-        .eq("season_id", seasonId)
-        .order("taken_at", { ascending: false })
-        .limit(10);
-
-      if (error || !data) {
-        setStatus("Unable to load recent shots.");
-        return;
-      }
-
-      type SupabaseShotRow = {
-        shot_id: number;
-        shot_index: number;
-        base_value: number;
-        multiplier: number;
-        points: number;
-        taken_at: string;
-        note?: string | null;
-        season_roster?: {
-          season_roster_id: number;
-          player?: { name?: string | null } | null;
-          season_team?: { team_name?: string | null } | null;
-        } | null;
-      };
-
-      const mapped: ShotLogRow[] = (data ?? []).map((row) => {
-        const typedRow = row as unknown as SupabaseShotRow;
-
-        return {
-          shot_id: typedRow.shot_id,
-          shot_index: typedRow.shot_index,
-          base_value: typedRow.base_value,
-          multiplier: typedRow.multiplier,
-          points: typedRow.points,
-          taken_at: typedRow.taken_at,
-          note: typedRow.note ?? null,
-          player_name: typedRow.season_roster?.player?.name ?? "Unknown",
-          team_name: typedRow.season_roster?.season_team?.team_name ?? null,
-        };
-      });
-
-      setShotLog(mapped);
-    },
-    [client],
-  );
-
-  const loadActiveSeason = useCallback(async () => {
+  const refresh = useCallback(async () => {
     if (!client) return;
-    setStatus("Loading active season...");
-    const { data, error } = await client
-      .from("seasons")
-      .select("season_id, season_name")
-      .eq("status", "active")
-      .order("start_at", { ascending: false })
-      .limit(1)
-      .single();
 
-    if (error || !data) {
-      setStatus("No active season found. Create one in the database to start scoring.");
-      setActiveSeason(null);
+    const { context: nextContext, error } = await resolveShotInputContext(client);
+    if (error || !nextContext) {
+      setContext(null);
+      setRecentShots([]);
+      setStatus(error ?? "Unable to resolve current shot context.");
       return;
     }
 
-    setActiveSeason(data);
+    setContext(nextContext);
+    const { data: shotRows, error: shotsError } = await loadRecentShots(client, nextContext.seasonPlayer.id);
+    if (shotsError) {
+      setStatus(`Context loaded, but failed to load recent shots: ${shotsError.message}`);
+      return;
+    }
+
+    setRecentShots((shotRows ?? []) as RecentShot[]);
     setStatus("");
-    await Promise.all([loadRoster(data.season_id), loadShotLog(data.season_id), loadSeasonSettings(data.season_id)]);
-  }, [client, loadRoster, loadSeasonSettings, loadShotLog]);
+  }, [client]);
 
   useEffect(() => {
-    loadActiveSeason();
-  }, [loadActiveSeason]);
+    refresh();
+  }, [refresh]);
 
   useEffect(() => {
-    function handleClick(event: MouseEvent) {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
-        setMenuOpen(false);
-      }
-    }
+    if (!client || !context) return;
 
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, []);
+    const channel = client
+      .channel(`shot-input-${context.seasonPlayer.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "shot_events",
+          filter: `season_player_id=eq.${context.seasonPlayer.id}`,
+        },
+        () => {
+          refresh();
+        },
+      )
+      .subscribe();
 
-  async function submitShot(event: React.FormEvent<HTMLFormElement>) {
+    return () => {
+      void client.removeChannel(channel);
+    };
+  }, [client, context, refresh]);
+
+  async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!client || !activeSeason) return;
-    if (!selectedRosterId) {
-      setStatus("Choose a player before recording a shot.");
-      return;
-    }
+    if (!client || !context) return;
 
-    setLoading(true);
-    setStatus("Recording shot...");
-    const { error } = await client.rpc("record_shot", {
-      p_season_roster_id: selectedRosterId,
-      p_base_value: baseValue,
-      p_multiplier: multiplier,
-      p_note: note.trim() || null,
+    setSaving(true);
+    setStatus("Saving shot...");
+
+    const { error } = await submitShotEvent(client, context, {
+      selectedDie,
+      basePoints,
+      isDouble,
+      isMoneyball,
     });
 
     if (error) {
-      setStatus(error.message);
-    } else {
-      setStatus("Shot recorded.");
-      setNote("");
-      await loadShotLog(activeSeason.season_id);
+      setStatus(error);
+      setSaving(false);
+      return;
     }
 
-    setLoading(false);
+    setStatus("Shot saved.");
+    setSaving(false);
+    await refresh();
   }
 
   if (envError) {
-    return (
-      <main className="min-h-screen flex items-center justify-center p-6">
-        <div className="bg-red-900/50 border border-red-500 text-red-50 rounded-xl p-6 max-w-xl w-full text-center">
-          <p className="font-semibold">{envError}</p>
-          <p className="mt-2 text-sm text-red-100">Update your .env.local and restart the dev server.</p>
-        </div>
-      </main>
-    );
+    return <div className="rounded-lg border border-red-500 p-4 text-red-200">{envError}</div>;
   }
 
   return (
-    <main className="min-h-screen p-6">
-      <div className="max-w-6xl mx-auto space-y-8">
-        <header className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-          <div className="flex items-start gap-3">
-            <div className="relative" ref={menuRef}>
-              <button
-                type="button"
-                className="rounded-lg border border-emerald-500/50 bg-slate-900/70 p-2 text-emerald-100 hover:bg-slate-800"
-                onClick={() => setMenuOpen((open) => !open)}
-                aria-label="Open admin navigation"
-                aria-expanded={menuOpen}
-              >
-                <Menu className="h-6 w-6" />
-              </button>
-              {menuOpen && (
-                <div className="absolute z-20 mt-2 w-56 rounded-xl border border-emerald-500/40 bg-slate-900 shadow-xl">
-                  <p className="px-4 pt-3 text-xs uppercase tracking-widest text-slate-400">Navigation</p>
-                  <div className="py-2">
-                    {navigationLinks.map((link) => (
-                      <Link
-                        key={link.href}
-                        href={link.href}
-                        className="block px-4 py-2 text-sm text-slate-100 hover:bg-emerald-500/10"
-                        onClick={() => setMenuOpen(false)}
-                      >
-                        {link.label}
-                      </Link>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-            <div>
-              <p className="text-sm uppercase tracking-widest text-emerald-300">Admin Console</p>
-              <h1 className="text-3xl font-bold text-emerald-100">Record shots</h1>
-              <p className="text-sm text-slate-300">
-                Pick a base shot, multiplier, and optional note. Moneyball still applies automatically every 10th shot.
-              </p>
-            </div>
-          </div>
-          <div className="text-right">
-            <p className="text-sm text-slate-300">Active season</p>
-            <p className="text-xl font-semibold text-emerald-200">{activeSeason?.season_name ?? "Not set"}</p>
-          </div>
-        </header>
+    <main className="space-y-5">
+      <header className="space-y-2">
+        <h1 className="text-2xl font-semibold text-emerald-200">Shot Input</h1>
+        <p className="text-sm text-slate-300">Minimal v2 flow for submitting a shot into the new schema.</p>
+        <p className="text-xs text-slate-400">
+          Next steps: season setup, standings, stats, and history will build on this shared context pattern.
+        </p>
+      </header>
 
-        <section className="grid md:grid-cols-[1.2fr_0.8fr] gap-6">
-          <div className="bg-slate-900/70 border border-emerald-500/30 rounded-xl p-6 space-y-4">
-            <h2 className="text-xl font-semibold text-emerald-100">Record a shot</h2>
-            <form className="space-y-4" onSubmit={submitShot}>
-              <div className="space-y-2">
-                <label className="text-sm text-slate-200">Player</label>
-                <select
-                  className="w-full rounded-lg p-3 bg-slate-100 text-slate-900"
-                  value={selectedRosterId ?? ""}
-                  onChange={(e) => setSelectedRosterId(Number(e.target.value))}
-                  disabled={!activeSeason || roster.length === 0}
-                >
-                  <option value="" disabled>
-                    Select a player
-                  </option>
-                  {roster.map((entry) => (
-                    <option key={entry.season_roster_id} value={entry.season_roster_id}>
-                      {entry.player_name}
-                      {entry.team_name ? ` · ${entry.team_name}` : ""}
-                      {entry.tier_name ? ` · ${entry.tier_name}` : ""}
-                    </option>
-                  ))}
-                </select>
-              </div>
+      <section className="rounded-lg border border-slate-700 bg-slate-900/50 p-4 text-sm text-slate-200">
+        <h2 className="font-medium text-emerald-200">Current context</h2>
+        {context ? (
+          <ul className="mt-2 space-y-1">
+            <li>League: {context.leagueId}</li>
+            <li>Season: {context.season.name}</li>
+            <li>Player: {context.player.displayName}</li>
+            <li>Shots remaining: {context.seasonPlayer.shotsRemaining}</li>
+          </ul>
+        ) : (
+          <p className="mt-2 text-amber-300">{status || "No context loaded."}</p>
+        )}
+      </section>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <p className="text-sm text-slate-200">Base value</p>
-                  <div className="grid grid-cols-3 gap-2">
-                    {(pointsRules.base_values.length ? pointsRules.base_values : defaultPointsRules.base_values).map((value) => (
-                      <button
-                        key={value}
-                        type="button"
-                        className={`rounded-lg border p-3 font-semibold ${
-                          baseValue === value
-                            ? "border-emerald-400 bg-emerald-500 text-slate-900"
-                            : "border-slate-600 bg-slate-800 text-slate-100"
-                        }`}
-                        onClick={() => setBaseValue(value)}
-                      >
-                        Base {value}
-                      </button>
-                    ))}
-                  </div>
-                </div>
+      <form onSubmit={onSubmit} className="rounded-lg border border-slate-700 bg-slate-950/60 p-4 space-y-4">
+        <div className="grid grid-cols-2 gap-3">
+          <label className="space-y-1 text-sm">
+            <span className="text-slate-300">Selected die</span>
+            <select className="w-full rounded border border-slate-700 bg-slate-900 p-2" value={selectedDie} onChange={(e) => setSelectedDie(Number(e.target.value))}>
+              {[1, 2, 3, 4, 5, 6].map((die) => (
+                <option key={die} value={die}>
+                  {die}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="space-y-1 text-sm">
+            <span className="text-slate-300">Base points</span>
+            <select className="w-full rounded border border-slate-700 bg-slate-900 p-2" value={basePoints} onChange={(e) => setBasePoints(Number(e.target.value) as 1 | 2 | 4 | 8)}>
+              {[1, 2, 4, 8].map((points) => (
+                <option key={points} value={points}>
+                  {points}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
 
-                <div className="space-y-2">
-                  <p className="text-sm text-slate-200">Multiplier</p>
-                  <div className="grid grid-cols-3 gap-2">
-                    {(pointsRules.multipliers.length ? pointsRules.multipliers : defaultPointsRules.multipliers).map((value) => (
-                      <button
-                        key={value}
-                        type="button"
-                        className={`rounded-lg border p-3 font-semibold ${
-                          multiplier === value
-                            ? "border-emerald-400 bg-emerald-500 text-slate-900"
-                            : "border-slate-600 bg-slate-800 text-slate-100"
-                        }`}
-                        onClick={() => setMultiplier(value)}
-                      >
-                        x{value}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
+        <div className="flex gap-4 text-sm text-slate-300">
+          <label className="inline-flex items-center gap-2">
+            <input type="checkbox" checked={isDouble} onChange={(e) => setIsDouble(e.target.checked)} /> Double
+          </label>
+          <label className="inline-flex items-center gap-2">
+            <input type="checkbox" checked={isMoneyball} onChange={(e) => setIsMoneyball(e.target.checked)} /> Moneyball
+          </label>
+        </div>
 
-              <div className="space-y-2">
-                <label className="text-sm text-slate-200">Note (optional)</label>
-                <textarea
-                  className="w-full rounded-lg p-3 bg-slate-100 text-slate-900"
-                  rows={2}
-                  value={note}
-                  onChange={(e) => setNote(e.target.value)}
-                  placeholder="e.g. sideline three, buzzer beater"
-                />
-              </div>
+        <button
+          type="submit"
+          className="rounded bg-emerald-500 px-4 py-2 font-medium text-slate-900 disabled:cursor-not-allowed disabled:bg-slate-600"
+          disabled={!context || saving || context.seasonPlayer.shotsRemaining <= 0}
+        >
+          {saving ? "Saving..." : "Submit shot"}
+        </button>
+      </form>
 
-              <button
-                type="submit"
-                disabled={!selectedRosterId || loading || !activeSeason}
-                className="w-full md:w-auto px-6 py-3 rounded-lg font-bold bg-emerald-500 text-slate-950 hover:bg-emerald-400 disabled:opacity-50"
-              >
-                {loading ? "Saving..." : "Record shot"}
-              </button>
-              <p className="text-sm text-slate-300">Moneyball is automatic on every 10th shot for the player.</p>
-              {status && <p className="text-sm text-emerald-200">{status}</p>}
-            </form>
-          </div>
+      {status && <p className="text-sm text-slate-300">{status}</p>}
 
-          <div className="bg-slate-900/70 border border-emerald-500/30 rounded-xl p-6 space-y-3">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xl font-semibold text-emerald-100">Recent shots</h2>
-              <button
-                className="text-sm text-emerald-300 underline"
-                onClick={() => activeSeason && loadShotLog(activeSeason.season_id)}
-                disabled={!activeSeason}
-              >
-                Refresh
-              </button>
-            </div>
-            {shotLog.length === 0 ? (
-              <p className="text-sm text-slate-300">No shots recorded yet.</p>
-            ) : (
-              <ul className="space-y-3">
-                {shotLog.map((shot) => (
-                  <li
-                    key={shot.shot_id}
-                    className="border border-slate-700 rounded-lg p-3 bg-slate-950/50 flex flex-col gap-1"
-                  >
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="font-semibold text-emerald-200">{shot.player_name}</p>
-                        <p className="text-xs text-slate-400">{shot.team_name ?? "Free agent"}</p>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-lg font-bold text-emerald-300">+{shot.points} pts</p>
-                        <p className="text-xs text-slate-400">Shot #{shot.shot_index}</p>
-                      </div>
-                    </div>
-                    <p className="text-xs text-slate-400">
-                      Base {shot.base_value} · Multiplier x{shot.multiplier}
-                    </p>
-                    {shot.note && <p className="text-sm text-slate-200">{shot.note}</p>}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </section>
+      <section className="rounded-lg border border-slate-700 bg-slate-900/50 p-4">
+        <h2 className="font-medium text-emerald-200">Recent shots</h2>
+        <ul className="mt-3 space-y-2 text-sm text-slate-200">
+          {recentShots.map((shot) => (
+            <li key={shot.id} className="rounded border border-slate-700 p-2">
+              #{shot.shot_number} • die {shot.selected_die} • {shot.base_points}
+              {shot.is_double ? " x2" : ""} = {shot.points_awarded} pts{shot.is_moneyball ? " • moneyball" : ""}
+            </li>
+          ))}
+          {recentShots.length === 0 && <li className="text-slate-400">No shots yet.</li>}
+        </ul>
+      </section>
+
+      <div className="flex gap-3 text-sm">
+        <Link href="/standings" className="text-emerald-300 underline">
+          Standings (existing page)
+        </Link>
+        <Link href="/history" className="text-emerald-300 underline">
+          History (existing page)
+        </Link>
       </div>
     </main>
   );
