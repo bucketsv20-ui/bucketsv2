@@ -1,39 +1,98 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
+import type { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
 
-export type ShotInputContext = {
-  userId: string;
+export type ActiveSeasonContext = {
   leagueId: string;
-  season: {
-    id: string;
-    name: string;
-  };
-  player: {
-    id: string;
-    displayName: string;
-  };
-  seasonPlayer: {
-    id: string;
-    teamId: string | null;
-    tierId: string;
-    shotsRemaining: number;
-  };
+  seasonId: string;
+  seasonName: string;
 };
 
-export type ShotInsertPayload = {
+export type SeasonPlayerOption = {
+  seasonPlayerId: string;
+  playerId: string;
+  displayName: string;
+  teamId: string | null;
+  tierId: string;
+  shotsCapInitial: number;
+  shotsRemaining: number;
+};
+
+export type DieFaceOption = {
+  dieValue: number;
+  bottleTypeId: string;
+  bottleTypeName: string;
+  baseScore: 1 | 2 | 4;
+};
+
+type SeasonPlayerRow = {
+  id: string;
+  player_id: string;
+  team_id: string | null;
+  tier_id: string;
+  shots_cap_initial: number;
+  shots_remaining: number;
+  players: { display_name: string | null }[] | { display_name: string | null } | null;
+};
+
+type DiceFaceRow = {
+  die_value: number;
+  bottle_type_id: string;
+  bottle_types: { name: string; base_score: 1 | 2 | 4 }[] | { name: string; base_score: 1 | 2 | 4 } | null;
+};
+
+export type RecordShotInput = {
+  seasonPlayerId: string;
   selectedDie: number;
-  basePoints: 1 | 2 | 4 | 8;
   isDouble: boolean;
-  isMoneyball: boolean;
+  isWaiver: boolean;
 };
 
-export async function resolveShotInputContext(client: SupabaseClient): Promise<{ context: ShotInputContext | null; error: string | null }> {
+export type RecordShotResult = {
+  shot: {
+    id: string;
+    shot_number: number;
+    points_awarded: number;
+    base_points: number;
+    is_moneyball: boolean;
+    is_double: boolean;
+    is_waiver: boolean;
+    occurred_at: string;
+    bottle_type_id: string | null;
+    team_id: string | null;
+    tier_id: string;
+  };
+  season_player: {
+    id: string;
+    shots_remaining: number;
+  };
+  player_stats: {
+    score_total: number;
+    shots_taken: number;
+    pps: number;
+    moneyballs_made: number;
+    doubles_made: number;
+    current_shot_streak: number;
+    high_shot_streak: number;
+    current_point_streak: number;
+    high_point_streak: number;
+    xp_from_shots: number;
+    xp_total: number;
+    level: number;
+  };
+  team_stats?: {
+    score_total: number;
+    shots_taken: number;
+    pps: number;
+  } | null;
+};
+
+export async function loadActiveSeasonContext(client: SupabaseClient): Promise<{ context: ActiveSeasonContext | null; error: string | null }> {
   const {
     data: { user },
     error: userError,
   } = await client.auth.getUser();
 
   if (userError || !user) {
-    return { context: null, error: "You must be logged in to submit shots." };
+    return { context: null, error: "You must be logged in." };
   }
 
   const { data: membership } = await client
@@ -45,7 +104,7 @@ export async function resolveShotInputContext(client: SupabaseClient): Promise<{
     .maybeSingle();
 
   if (!membership?.league_id) {
-    return { context: null, error: "No league membership found for this account." };
+    return { context: null, error: "No active league membership found." };
   }
 
   const { data: season } = await client
@@ -61,111 +120,114 @@ export async function resolveShotInputContext(client: SupabaseClient): Promise<{
     return { context: null, error: "No active season found for your league." };
   }
 
-  const { data: player } = await client
-    .from("players")
-    .select("id, display_name")
-    .eq("league_id", membership.league_id)
-    .eq("linked_user_id", user.id)
-    .eq("is_active", true)
-    .limit(1)
-    .maybeSingle();
-
-  if (!player?.id) {
-    return { context: null, error: "No player linked to this user in the current league." };
-  }
-
-  const { data: seasonPlayer } = await client
-    .from("season_players")
-    .select("id, team_id, tier_id, shots_remaining")
-    .eq("season_id", season.id)
-    .eq("player_id", player.id)
-    .eq("is_enabled", true)
-    .limit(1)
-    .maybeSingle();
-
-  if (!seasonPlayer?.id) {
-    return { context: null, error: "No enabled season player record found for the active season." };
-  }
-
   return {
     context: {
-      userId: user.id,
       leagueId: membership.league_id,
-      season: {
-        id: season.id,
-        name: season.name,
-      },
-      player: {
-        id: player.id,
-        displayName: player.display_name,
-      },
-      seasonPlayer: {
-        id: seasonPlayer.id,
-        teamId: seasonPlayer.team_id,
-        tierId: seasonPlayer.tier_id,
-        shotsRemaining: seasonPlayer.shots_remaining,
-      },
+      seasonId: season.id,
+      seasonName: season.name,
     },
     error: null,
   };
 }
 
-export async function submitShotEvent(client: SupabaseClient, context: ShotInputContext, payload: ShotInsertPayload) {
-  if (context.seasonPlayer.shotsRemaining <= 0) {
-    return { error: "No shots remaining for this season player." };
+export async function loadSeasonPlayers(client: SupabaseClient, seasonId: string) {
+  const { data, error } = await client
+    .from("season_players")
+    .select("id, player_id, team_id, tier_id, shots_cap_initial, shots_remaining, players!inner(display_name)")
+    .eq("season_id", seasonId)
+    .eq("is_enabled", true)
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    return { data: [] as SeasonPlayerOption[], error };
   }
 
-  const { data: latestShot } = await client
-    .from("shot_events")
-    .select("shot_number")
-    .eq("season_player_id", context.seasonPlayer.id)
-    .order("shot_number", { ascending: false })
+  const mapped: SeasonPlayerOption[] = ((data ?? []) as SeasonPlayerRow[]).map((row) => ({
+    seasonPlayerId: row.id,
+    playerId: row.player_id,
+    displayName: (Array.isArray(row.players) ? row.players[0]?.display_name : row.players?.display_name) ?? "Player",
+    teamId: row.team_id,
+    tierId: row.tier_id,
+    shotsCapInitial: row.shots_cap_initial,
+    shotsRemaining: row.shots_remaining,
+  }));
+
+  return { data: mapped, error: null };
+}
+
+export async function loadActiveDiceFaces(client: SupabaseClient, leagueId: string, seasonId: string, occurredAt = new Date().toISOString()) {
+  const { data: diceSet, error: diceSetError } = await client
+    .from("dice_sets")
+    .select("id")
+    .eq("league_id", leagueId)
+    .or(`season_id.eq.${seasonId},season_id.is.null`)
+    .lte("effective_from", occurredAt)
+    .or(`effective_to.is.null,effective_to.gt.${occurredAt}`)
+    .order("season_id", { ascending: false })
+    .order("effective_from", { ascending: false })
     .limit(1)
     .maybeSingle();
 
-  const nextShotNumber = (latestShot?.shot_number ?? 0) + 1;
-  const pointsAwarded = payload.basePoints * (payload.isDouble ? 2 : 1);
+  if (diceSetError || !diceSet?.id) {
+    return { data: [] as DieFaceOption[], error: diceSetError ?? new Error("No active dice set found.") };
+  }
 
-  const { error: insertError } = await client.from("shot_events").insert({
-    league_id: context.leagueId,
-    season_id: context.season.id,
-    season_player_id: context.seasonPlayer.id,
-    shot_number: nextShotNumber,
-    selected_die: payload.selectedDie,
-    tier_id: context.seasonPlayer.tierId,
-    team_id: context.seasonPlayer.teamId,
-    base_points: payload.basePoints,
-    is_double: payload.isDouble,
-    is_moneyball: payload.isMoneyball,
-    points_awarded: pointsAwarded,
+  const { data, error } = await client
+    .from("dice_set_faces")
+    .select("die_value, bottle_type_id, bottle_types!inner(name, base_score)")
+    .eq("dice_set_id", diceSet.id)
+    .order("die_value", { ascending: true });
+
+  if (error) {
+    return { data: [] as DieFaceOption[], error };
+  }
+
+  const mapped: DieFaceOption[] = ((data ?? []) as DiceFaceRow[]).map((row) => {
+    const bottleType = Array.isArray(row.bottle_types) ? row.bottle_types[0] : row.bottle_types;
+
+    return {
+    dieValue: row.die_value,
+    bottleTypeId: row.bottle_type_id,
+    bottleTypeName: bottleType?.name ?? "Unknown bottle",
+    baseScore: bottleType?.base_score ?? 1,
+  };
   });
 
-  if (insertError) {
-    return {
-      error: `Unable to save shot: ${insertError.message}`,
-    };
+  return { data: mapped, error: null };
+}
+
+export async function recordShot(client: SupabaseClient, input: RecordShotInput): Promise<{ data: RecordShotResult | null; error: string | null }> {
+  const { data, error } = await client.rpc("record_shot", {
+    p_season_player_id: input.seasonPlayerId,
+    p_selected_die: input.selectedDie,
+    p_is_double: input.isDouble,
+    p_is_waiver: input.isWaiver,
+  });
+
+  if (error) {
+    return { data: null, error: error.message };
   }
 
-  const nextRemaining = Math.max(0, context.seasonPlayer.shotsRemaining - 1);
-  const { error: remainingError } = await client
-    .from("season_players")
-    .update({ shots_remaining: nextRemaining })
-    .eq("id", context.seasonPlayer.id);
-
-  if (remainingError) {
-    return {
-      error: `Shot saved, but failed to decrement shots_remaining: ${remainingError.message}`,
-    };
-  }
-
-  return { error: null };
+  return { data: data as RecordShotResult, error: null };
 }
 
 export async function loadRecentShots(client: SupabaseClient, seasonPlayerId: string) {
   return client
     .from("shot_events")
-    .select("id, shot_number, selected_die, base_points, is_double, is_moneyball, points_awarded, occurred_at")
+    .select("id, shot_number, selected_die, base_points, is_double, is_moneyball, is_waiver, points_awarded, occurred_at")
     .eq("season_player_id", seasonPlayerId)
+    .eq("is_voided", false)
     .order("shot_number", { ascending: false })
     .limit(15);
+}
+
+export function subscribeToSeasonShotEvents(client: SupabaseClient, seasonId: string, onChange: () => void): RealtimeChannel {
+  return client
+    .channel(`shot-events-season-${seasonId}`)
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "shot_events", filter: `season_id=eq.${seasonId}` },
+      onChange,
+    )
+    .subscribe();
 }
