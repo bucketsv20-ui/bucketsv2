@@ -23,6 +23,22 @@ export type DieFaceOption = {
   baseScore: 1 | 2 | 4;
 };
 
+type SeasonPlayerRow = {
+  id: string;
+  player_id: string;
+  team_id: string | null;
+  tier_id: string;
+  shots_cap_initial: number;
+  shots_remaining: number;
+  players: { display_name: string | null }[] | { display_name: string | null } | null;
+};
+
+type DiceFaceRow = {
+  die_value: number;
+  bottle_type_id: string;
+  bottle_types: { name: string; base_score: 1 | 2 | 4 }[] | { name: string; base_score: 1 | 2 | 4 } | null;
+};
+
 export type RecordShotInput = {
   seasonPlayerId: string;
   selectedDie: number;
@@ -126,10 +142,10 @@ export async function loadSeasonPlayers(client: SupabaseClient, seasonId: string
     return { data: [] as SeasonPlayerOption[], error };
   }
 
-  const mapped: SeasonPlayerOption[] = (data ?? []).map((row) => ({
+  const mapped: SeasonPlayerOption[] = ((data ?? []) as SeasonPlayerRow[]).map((row) => ({
     seasonPlayerId: row.id,
     playerId: row.player_id,
-    displayName: (row.players as { display_name: string } | null)?.display_name ?? "Player",
+    displayName: (Array.isArray(row.players) ? row.players[0]?.display_name : row.players?.display_name) ?? "Player",
     teamId: row.team_id,
     tierId: row.tier_id,
     shotsCapInitial: row.shots_cap_initial,
@@ -166,12 +182,16 @@ export async function loadActiveDiceFaces(client: SupabaseClient, leagueId: stri
     return { data: [] as DieFaceOption[], error };
   }
 
-  const mapped: DieFaceOption[] = (data ?? []).map((row) => ({
+  const mapped: DieFaceOption[] = ((data ?? []) as DiceFaceRow[]).map((row) => {
+    const bottleType = Array.isArray(row.bottle_types) ? row.bottle_types[0] : row.bottle_types;
+
+    return {
     dieValue: row.die_value,
     bottleTypeId: row.bottle_type_id,
-    bottleTypeName: (row.bottle_types as { name: string }).name,
-    baseScore: (row.bottle_types as { base_score: 1 | 2 | 4 }).base_score,
-  }));
+    bottleTypeName: bottleType?.name ?? "Unknown bottle",
+    baseScore: bottleType?.base_score ?? 1,
+  };
+  });
 
   return { data: mapped, error: null };
 }
