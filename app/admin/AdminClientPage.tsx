@@ -9,7 +9,7 @@ import {
   createSeasonTeam,
   createShot,
   createTier,
-  loadBootstrap,
+  loadLeagueContext,
   loadPlayers,
   loadSeasons,
   loadSeasonPlayers,
@@ -96,19 +96,19 @@ export default function AdminClientPage() {
   const refreshCore = useCallback(async () => {
     if (!client) return;
 
-    const { data: bootstrapData, error: bootstrapError } = await loadBootstrap(client);
-    if (bootstrapError || !bootstrapData) {
+    const { data: leagueContext, error: leagueContextError } = await loadLeagueContext(client);
+    if (leagueContextError || !leagueContext) {
       setLeagueId(null);
-      setStatus(bootstrapError ?? "Unable to initialize app.");
+      setStatus(leagueContextError ?? "Unable to initialize app.");
       return;
     }
 
-    setLeagueId(bootstrapData.leagueId);
+    setLeagueId(leagueContext.leagueId);
 
     const [seasonsRes, playersRes, tiersRes] = await Promise.all([
-      loadSeasons(client, bootstrapData.leagueId),
-      loadPlayers(client, bootstrapData.leagueId),
-      loadTiers(client, bootstrapData.leagueId),
+      loadSeasons(client, leagueContext.leagueId),
+      loadPlayers(client, leagueContext.leagueId),
+      loadTiers(client, leagueContext.leagueId),
     ]);
 
     if (seasonsRes.error || playersRes.error || tiersRes.error) {
@@ -222,7 +222,7 @@ export default function AdminClientPage() {
       </header>
 
       {!leagueId ? (
-        <section className="rounded border border-red-500/50 bg-red-950/30 p-4 text-red-100">No active league membership found. This app is blocked until your user has an active row in league_memberships.</section>
+        <section className="rounded border border-red-500/50 bg-red-950/30 p-4 text-red-100">No active season or membership seed data found. Run the default seed data and ensure at least one active season exists.</section>
       ) : (
         <>
           <section className="rounded border border-slate-700 p-4 space-y-3">
