@@ -1,7 +1,6 @@
 import type { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
 
-export type AppBootstrap = {
-  userId: string;
+export type LeagueContext = {
   leagueId: string;
 };
 
@@ -57,29 +56,39 @@ export type ShotEvent = {
   occurred_at: string;
 };
 
-export async function loadBootstrap(client: SupabaseClient) {
-  const { data: authData, error: authError } = await client.auth.getUser();
-  if (authError || !authData.user) {
-    return { data: null as AppBootstrap | null, error: "You must be logged in." };
+export async function loadLeagueContext(client: SupabaseClient) {
+  const { data: activeSeason, error: activeSeasonError } = await client
+    .from("seasons")
+    .select("league_id")
+    .eq("status", "active")
+    .order("started_at", { ascending: false, nullsFirst: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (activeSeasonError) {
+    return { data: null as LeagueContext | null, error: activeSeasonError.message };
+  }
+
+  if (activeSeason?.league_id) {
+    return { data: { leagueId: activeSeason.league_id }, error: null as string | null };
   }
 
   const { data: membership, error: membershipError } = await client
     .from("league_memberships")
     .select("league_id")
-    .eq("user_id", authData.user.id)
     .eq("is_active", true)
     .limit(1)
     .maybeSingle();
 
   if (membershipError) {
-    return { data: null as AppBootstrap | null, error: membershipError.message };
+    return { data: null as LeagueContext | null, error: membershipError.message };
   }
 
   if (!membership?.league_id) {
-    return { data: null as AppBootstrap | null, error: "No active league membership found. Ask a league admin to add you." };
+    return { data: null as LeagueContext | null, error: "No active season or league membership found." };
   }
 
-  return { data: { userId: authData.user.id, leagueId: membership.league_id }, error: null as string | null };
+  return { data: { leagueId: membership.league_id }, error: null as string | null };
 }
 
 export async function loadSeasons(client: SupabaseClient, leagueId: string) {
