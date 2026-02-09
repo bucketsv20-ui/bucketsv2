@@ -1,9 +1,18 @@
 "use client";
 
-import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getSupabaseClient } from "@/src/lib/supabaseClient";
-import { loadRecentShots, resolveShotInputContext, submitShotEvent, type ShotInputContext } from "@/src/lib/db/shotInput";
+import {
+  loadActiveDiceFaces,
+  loadActiveSeasonContext,
+  loadRecentShots,
+  loadSeasonPlayers,
+  recordShot,
+  subscribeToSeasonShotEvents,
+  type ActiveSeasonContext,
+  type DieFaceOption,
+  type SeasonPlayerOption,
+} from "@/src/lib/db/shotInput";
 
 type RecentShot = {
   id: string;
@@ -12,94 +21,121 @@ type RecentShot = {
   base_points: number;
   is_double: boolean;
   is_moneyball: boolean;
+  is_waiver: boolean;
   points_awarded: number;
   occurred_at: string;
 };
 
 export default function AdminClientPage() {
   const { client, error: envError } = useMemo(() => getSupabaseClient(), []);
-  const [context, setContext] = useState<ShotInputContext | null>(null);
+  const [context, setContext] = useState<ActiveSeasonContext | null>(null);
+  const [seasonPlayers, setSeasonPlayers] = useState<SeasonPlayerOption[]>([]);
+  const [selectedSeasonPlayerId, setSelectedSeasonPlayerId] = useState<string>("");
+  const [diceFaces, setDiceFaces] = useState<DieFaceOption[]>([]);
   const [selectedDie, setSelectedDie] = useState(1);
-  const [basePoints, setBasePoints] = useState<1 | 2 | 4 | 8>(1);
   const [isDouble, setIsDouble] = useState(false);
-  const [isMoneyball, setIsMoneyball] = useState(false);
+  const [isWaiver, setIsWaiver] = useState(false);
   const [recentShots, setRecentShots] = useState<RecentShot[]>([]);
-  const [status, setStatus] = useState("Loading current context...");
+  const [status, setStatus] = useState("Loading shot input...");
   const [saving, setSaving] = useState(false);
+
+  const selectedSeasonPlayer = seasonPlayers.find((row) => row.seasonPlayerId === selectedSeasonPlayerId) ?? null;
+  const shotNumber = selectedSeasonPlayer ? selectedSeasonPlayer.shotsCapInitial - selectedSeasonPlayer.shotsRemaining + 1 : 1;
+  const isMoneyball = shotNumber % 10 === 0;
+  const selectedFace = diceFaces.find((face) => face.dieValue === selectedDie) ?? null;
+  const basePoints = selectedFace ? selectedFace.baseScore * (isMoneyball ? 2 : 1) : 1;
+  const calculatedScore = basePoints * (isDouble ? 2 : 1);
 
   const refresh = useCallback(async () => {
     if (!client) return;
 
-    const { context: nextContext, error } = await resolveShotInputContext(client);
-    if (error || !nextContext) {
+    const { context: nextContext, error: contextError } = await loadActiveSeasonContext(client);
+    if (contextError || !nextContext) {
       setContext(null);
-      setRecentShots([]);
-      setStatus(error ?? "Unable to resolve current shot context.");
+      setSeasonPlayers([]);
+      setSelectedSeasonPlayerId("");
+      setStatus(contextError ?? "Unable to load season context.");
       return;
     }
 
     setContext(nextContext);
-    const { data: shotRows, error: shotsError } = await loadRecentShots(client, nextContext.seasonPlayer.id);
-    if (shotsError) {
-      setStatus(`Context loaded, but failed to load recent shots: ${shotsError.message}`);
+
+    const [{ data: players, error: playersError }, { data: faces, error: facesError }] = await Promise.all([
+      loadSeasonPlayers(client, nextContext.seasonId),
+      loadActiveDiceFaces(client, nextContext.leagueId, nextContext.seasonId),
+    ]);
+
+    if (playersError) {
+      setStatus(`Failed to load season players: ${playersError.message}`);
+      return;
+    }
+    if (facesError) {
+      setStatus(`Failed to load dice mapping: ${facesError.message}`);
       return;
     }
 
-    setRecentShots((shotRows ?? []) as RecentShot[]);
+    setSeasonPlayers(players);
+    setDiceFaces(faces);
+    setSelectedSeasonPlayerId((prev) => prev || players[0]?.seasonPlayerId || "");
+    setSelectedDie((prev) => (faces.some((face) => face.dieValue === prev) ? prev : faces[0]?.dieValue ?? 1));
     setStatus("");
   }, [client]);
 
+  const refreshRecentShots = useCallback(async () => {
+    if (!client || !selectedSeasonPlayerId) return;
+    const { data, error } = await loadRecentShots(client, selectedSeasonPlayerId);
+    if (error) {
+      setStatus(`Failed to load recent shots: ${error.message}`);
+      return;
+    }
+    setRecentShots((data ?? []) as RecentShot[]);
+  }, [client, selectedSeasonPlayerId]);
+
   useEffect(() => {
-    refresh();
+    void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    void refreshRecentShots();
+  }, [refreshRecentShots]);
 
   useEffect(() => {
     if (!client || !context) return;
 
-    const channel = client
-      .channel(`shot-input-${context.seasonPlayer.id}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "shot_events",
-          filter: `season_player_id=eq.${context.seasonPlayer.id}`,
-        },
-        () => {
-          refresh();
-        },
-      )
-      .subscribe();
+    const channel = subscribeToSeasonShotEvents(client, context.seasonId, () => {
+      void refresh();
+      void refreshRecentShots();
+    });
 
     return () => {
       void client.removeChannel(channel);
     };
-  }, [client, context, refresh]);
+  }, [client, context, refresh, refreshRecentShots]);
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!client || !context) return;
+    if (!client || !selectedSeasonPlayer) return;
 
     setSaving(true);
-    setStatus("Saving shot...");
+    setStatus("Submitting shot...");
 
-    const { error } = await submitShotEvent(client, context, {
+    const { error } = await recordShot(client, {
+      seasonPlayerId: selectedSeasonPlayer.seasonPlayerId,
       selectedDie,
-      basePoints,
       isDouble,
-      isMoneyball,
+      isWaiver,
     });
 
     if (error) {
-      setStatus(error);
+      setStatus(error.includes("No shots remaining") ? "No shots remaining for this player." : error);
       setSaving(false);
       return;
     }
 
-    setStatus("Shot saved.");
+    setStatus("Shot recorded.");
     setSaving(false);
     await refresh();
+    await refreshRecentShots();
   }
 
   if (envError) {
@@ -110,48 +146,55 @@ export default function AdminClientPage() {
     <main className="space-y-5">
       <header className="space-y-2">
         <h1 className="text-2xl font-semibold text-emerald-200">Shot Input</h1>
-        <p className="text-sm text-slate-300">Minimal v2 flow for submitting a shot into the new schema.</p>
-        <p className="text-xs text-slate-400">
-          Next steps: season setup, standings, stats, and history will build on this shared context pattern.
-        </p>
+        <p className="text-sm text-slate-300">Submit one shot at a time for the active season. Moneyball auto-applies every 10th shot.</p>
       </header>
 
-      <section className="rounded-lg border border-slate-700 bg-slate-900/50 p-4 text-sm text-slate-200">
-        <h2 className="font-medium text-emerald-200">Current context</h2>
-        {context ? (
-          <ul className="mt-2 space-y-1">
-            <li>League: {context.leagueId}</li>
-            <li>Season: {context.season.name}</li>
-            <li>Player: {context.player.displayName}</li>
-            <li>Shots remaining: {context.seasonPlayer.shotsRemaining}</li>
-          </ul>
-        ) : (
-          <p className="mt-2 text-amber-300">{status || "No context loaded."}</p>
-        )}
-      </section>
-
       <form onSubmit={onSubmit} className="rounded-lg border border-slate-700 bg-slate-950/60 p-4 space-y-4">
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <label className="space-y-1 text-sm">
-            <span className="text-slate-300">Selected die</span>
+            <span className="text-slate-300">Player</span>
+            <select
+              className="w-full rounded border border-slate-700 bg-slate-900 p-2"
+              value={selectedSeasonPlayerId}
+              onChange={(e) => setSelectedSeasonPlayerId(e.target.value)}
+            >
+              {seasonPlayers.map((player) => (
+                <option key={player.seasonPlayerId} value={player.seasonPlayerId}>
+                  {player.displayName}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="space-y-1 text-sm">
+            <span className="text-slate-300">Die roll</span>
             <select className="w-full rounded border border-slate-700 bg-slate-900 p-2" value={selectedDie} onChange={(e) => setSelectedDie(Number(e.target.value))}>
-              {[1, 2, 3, 4, 5, 6].map((die) => (
-                <option key={die} value={die}>
-                  {die}
+              {diceFaces.map((face) => (
+                <option key={face.dieValue} value={face.dieValue}>
+                  {face.dieValue}
                 </option>
               ))}
             </select>
           </label>
-          <label className="space-y-1 text-sm">
-            <span className="text-slate-300">Base points</span>
-            <select className="w-full rounded border border-slate-700 bg-slate-900 p-2" value={basePoints} onChange={(e) => setBasePoints(Number(e.target.value) as 1 | 2 | 4 | 8)}>
-              {[1, 2, 4, 8].map((points) => (
-                <option key={points} value={points}>
-                  {points}
-                </option>
-              ))}
-            </select>
-          </label>
+        </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 rounded border border-slate-800 p-3 text-sm text-slate-200">
+          <div>
+            <p className="text-slate-400">Shot #</p>
+            <p className="font-semibold">{shotNumber}</p>
+          </div>
+          <div>
+            <p className="text-slate-400">Moneyball</p>
+            <p className="font-semibold">{isMoneyball ? "Yes" : "No"}</p>
+          </div>
+          <div>
+            <p className="text-slate-400">Bottle</p>
+            <p className="font-semibold">{selectedFace?.bottleTypeName ?? "-"}</p>
+          </div>
+          <div>
+            <p className="text-slate-400">Base score</p>
+            <p className="font-semibold">{selectedFace?.baseScore ?? "-"}</p>
+          </div>
         </div>
 
         <div className="flex gap-4 text-sm text-slate-300">
@@ -159,18 +202,26 @@ export default function AdminClientPage() {
             <input type="checkbox" checked={isDouble} onChange={(e) => setIsDouble(e.target.checked)} /> Double
           </label>
           <label className="inline-flex items-center gap-2">
-            <input type="checkbox" checked={isMoneyball} onChange={(e) => setIsMoneyball(e.target.checked)} /> Moneyball
+            <input type="checkbox" checked={isWaiver} onChange={(e) => setIsWaiver(e.target.checked)} /> Dash (Waiver)
           </label>
         </div>
+
+        <p className="text-sm text-emerald-200">Calculated Score: {calculatedScore}</p>
 
         <button
           type="submit"
           className="rounded bg-emerald-500 px-4 py-2 font-medium text-slate-900 disabled:cursor-not-allowed disabled:bg-slate-600"
-          disabled={!context || saving || context.seasonPlayer.shotsRemaining <= 0}
+          disabled={!selectedSeasonPlayer || saving || selectedSeasonPlayer.shotsRemaining <= 0 || !selectedFace}
         >
           {saving ? "Saving..." : "Submit shot"}
         </button>
       </form>
+
+      {context && selectedSeasonPlayer && (
+        <p className="text-sm text-slate-300">
+          Season: {context.seasonName} · Shots remaining: {selectedSeasonPlayer.shotsRemaining}
+        </p>
+      )}
 
       {status && <p className="text-sm text-slate-300">{status}</p>}
 
@@ -180,21 +231,14 @@ export default function AdminClientPage() {
           {recentShots.map((shot) => (
             <li key={shot.id} className="rounded border border-slate-700 p-2">
               #{shot.shot_number} • die {shot.selected_die} • {shot.base_points}
-              {shot.is_double ? " x2" : ""} = {shot.points_awarded} pts{shot.is_moneyball ? " • moneyball" : ""}
+              {shot.is_double ? " x2" : ""} = {shot.points_awarded} pts
+              {shot.is_moneyball ? " • moneyball" : ""}
+              {shot.is_waiver ? " • waiver" : ""}
             </li>
           ))}
           {recentShots.length === 0 && <li className="text-slate-400">No shots yet.</li>}
         </ul>
       </section>
-
-      <div className="flex gap-3 text-sm">
-        <Link href="/standings" className="text-emerald-300 underline">
-          Standings (existing page)
-        </Link>
-        <Link href="/history" className="text-emerald-300 underline">
-          History (existing page)
-        </Link>
-      </div>
     </main>
   );
 }
