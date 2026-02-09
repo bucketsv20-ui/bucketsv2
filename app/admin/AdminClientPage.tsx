@@ -174,7 +174,13 @@ export default function AdminClientPage() {
     setSeasonTeams(mappedTeams);
     setSeasonPlayers(mappedSeasonPlayers);
     setShotEvents((shotsRes.data ?? []) as ShotEvent[]);
-    setSelectedSeasonPlayerId((prev) => prev || mappedSeasonPlayers[0]?.id || "");
+    setSelectedSeasonPlayerId((prev) => {
+      if (mappedSeasonPlayers.some((seasonPlayer) => seasonPlayer.id === prev)) {
+        return prev;
+      }
+
+      return mappedSeasonPlayers[0]?.id ?? "";
+    });
   }, [activeSeason, client]);
 
   useEffect(() => {
