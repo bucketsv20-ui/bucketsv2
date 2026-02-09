@@ -14,6 +14,7 @@ export default async function LeagueDashboardPage({ params }: { params: Promise<
         <div className="rounded border border-slate-800 p-3">Players: {data.players.length}</div>
         <div className="rounded border border-slate-800 p-3">Members: {data.memberships.length}</div>
       </div>
+      <Link href={`/league/${leagueId}/season/new`} className="inline-block rounded bg-emerald-600 px-3 py-2 text-sm">Create season bundle</Link>
       <h2 className="text-lg font-medium">Seasons</h2>
       <ul className="space-y-2">
         {data.seasons.map((s: any) => (
