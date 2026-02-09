@@ -1,152 +1,86 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { X } from "lucide-react";
 import { getSupabaseClient } from "@/src/lib/supabaseClient";
-import DiceRoller from "@/src/components/DiceRoller";
 import {
-  createPlayer,
-  createSeason,
-  createSeasonTeam,
-  createShot,
-  createTier,
   loadLeagueContext,
-  loadPlayers,
   loadSeasons,
   loadSeasonPlayers,
-  loadSeasonTeams,
   loadShotEvents,
   loadTiers,
-  subscribeToSeasonRealtime,
-  upsertSeasonPlayer,
-  type Player,
   type Season,
   type SeasonPlayer,
-  type SeasonTeam,
   type ShotEvent,
   type Tier,
 } from "@/src/lib/db/gameLoop";
 
-type ScoreById = Record<string, number>;
+type PlayerWithTier = SeasonPlayer & {
+  tier_name: string;
+  tier_sort_order: number;
+};
 
 export default function AdminClientPage() {
   const { client, error: envError } = useMemo(() => getSupabaseClient(), []);
 
-  const [leagueId, setLeagueId] = useState<string | null>(null);
-  const [seasons, setSeasons] = useState<Season[]>([]);
-  const [players, setPlayers] = useState<Player[]>([]);
-  const [tiers, setTiers] = useState<Tier[]>([]);
-  const [seasonTeams, setSeasonTeams] = useState<SeasonTeam[]>([]);
-  const [seasonPlayers, setSeasonPlayers] = useState<SeasonPlayer[]>([]);
+  const [status, setStatus] = useState("Loading admin page...");
+  const [activeSeason, setActiveSeason] = useState<Season | null>(null);
+  const [players, setPlayers] = useState<PlayerWithTier[]>([]);
   const [shotEvents, setShotEvents] = useState<ShotEvent[]>([]);
+  const [selectedPlayer, setSelectedPlayer] = useState<PlayerWithTier | null>(null);
 
-  const [status, setStatus] = useState("Loading...");
-  const [saving, setSaving] = useState(false);
-
-  const [newSeasonName, setNewSeasonName] = useState("");
-  const [newSeasonFormat, setNewSeasonFormat] = useState<"team" | "ffa">("team");
-  const [newSeasonShotCap, setNewSeasonShotCap] = useState(100);
-
-  const [newPlayerName, setNewPlayerName] = useState("");
-  const [newPlayerLinkedUserId, setNewPlayerLinkedUserId] = useState("");
-
-  const [newTierName, setNewTierName] = useState("");
-  const [newTierSortOrder, setNewTierSortOrder] = useState(0);
-
-  const [newTeamName, setNewTeamName] = useState("");
-
-  const [selectedPlayerId, setSelectedPlayerId] = useState("");
-  const [assignmentTierId, setAssignmentTierId] = useState("");
-  const [assignmentTeamId, setAssignmentTeamId] = useState("");
-  const [assignmentShotsCap, setAssignmentShotsCap] = useState(100);
-
-  const [selectedSeasonPlayerId, setSelectedSeasonPlayerId] = useState("");
-  const [selectedDie, setSelectedDie] = useState(1);
-  const [rolledDice, setRolledDice] = useState<[number, number] | null>(null);
-  const [basePoints, setBasePoints] = useState<1 | 2>(1);
-  const [isDouble, setIsDouble] = useState(false);
-  const [isMoneyball, setIsMoneyball] = useState(false);
-
-  const activeSeason = useMemo(() => seasons.find((s) => s.status === "active") ?? null, [seasons]);
-  const selectedSeasonPlayer = useMemo(
-    () => seasonPlayers.find((sp) => sp.id === selectedSeasonPlayerId) ?? null,
-    [seasonPlayers, selectedSeasonPlayerId],
-  );
-
-  useEffect(() => {
-    setRolledDice(null);
-  }, [selectedSeasonPlayerId]);
-
-  const playerScores = useMemo(() => {
-    const map: ScoreById = {};
-    for (const shot of shotEvents) {
-      map[shot.season_player_id] = (map[shot.season_player_id] ?? 0) + shot.points_awarded;
+  const toUserMessage = (errorText?: string | null) => {
+    if (!errorText) return "Unable to load admin data.";
+    if (errorText.toLowerCase().includes("failed to fetch") || errorText.toLowerCase().includes("typeerror")) {
+      return "Unable to connect to Supabase right now. Check your NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY and network access.";
     }
-    return map;
-  }, [shotEvents]);
+    return errorText;
+  };
 
-  const teamScores = useMemo(() => {
-    const map: ScoreById = {};
-    for (const shot of shotEvents) {
-      if (!shot.team_id) continue;
-      map[shot.team_id] = (map[shot.team_id] ?? 0) + shot.points_awarded;
-    }
-    return map;
-  }, [shotEvents]);
-
-  const refreshCore = useCallback(async () => {
+  const loadAdminData = useCallback(async () => {
     if (!client) return;
 
-    const { data: leagueContext, error: leagueContextError } = await loadLeagueContext(client);
-    if (leagueContextError || !leagueContext) {
-      setLeagueId(null);
-      setStatus(leagueContextError ?? "Unable to initialize app.");
+    try {
+      const { data: leagueContext, error: leagueError } = await loadLeagueContext(client);
+    if (leagueError || !leagueContext) {
+      setStatus(toUserMessage(leagueError));
       return;
     }
 
-    setLeagueId(leagueContext.leagueId);
-
-    const [seasonsRes, playersRes, tiersRes] = await Promise.all([
+    const [seasonsRes, seasonTiersRes] = await Promise.all([
       loadSeasons(client, leagueContext.leagueId),
-      loadPlayers(client, leagueContext.leagueId),
       loadTiers(client, leagueContext.leagueId),
     ]);
 
-    if (seasonsRes.error || playersRes.error || tiersRes.error) {
-      setStatus(seasonsRes.error?.message ?? playersRes.error?.message ?? tiersRes.error?.message ?? "Failed loading records.");
+    if (seasonsRes.error || seasonTiersRes.error) {
+      setStatus(toUserMessage(seasonsRes.error?.message ?? seasonTiersRes.error?.message));
       return;
     }
 
-    setSeasons((seasonsRes.data ?? []) as Season[]);
-    setPlayers((playersRes.data ?? []) as Player[]);
-    setTiers((tiersRes.data ?? []) as Tier[]);
-    setStatus("");
-  }, [client]);
-
-  const refreshSeasonScoped = useCallback(async () => {
-    if (!client || !activeSeason) {
-      setSeasonTeams([]);
-      setSeasonPlayers([]);
+    const seasons = (seasonsRes.data ?? []) as Season[];
+    const active = seasons.find((season) => season.status === "active") ?? null;
+    if (!active) {
+      setActiveSeason(null);
+      setPlayers([]);
       setShotEvents([]);
+      setStatus("No active season found.");
       return;
     }
 
-    const [teamsRes, seasonPlayersRes, shotsRes] = await Promise.all([
-      loadSeasonTeams(client, activeSeason.id),
-      loadSeasonPlayers(client, activeSeason.id),
-      loadShotEvents(client, activeSeason.id),
+    const tiers = (seasonTiersRes.data ?? []) as Tier[];
+    const tierById = new Map(tiers.map((tier) => [tier.id, tier]));
+
+    const [seasonPlayersRes, shotEventsRes] = await Promise.all([
+      loadSeasonPlayers(client, active.id),
+      loadShotEvents(client, active.id),
     ]);
 
-    if (teamsRes.error || seasonPlayersRes.error || shotsRes.error) {
-      setStatus(teamsRes.error?.message ?? seasonPlayersRes.error?.message ?? shotsRes.error?.message ?? "Failed loading active season data.");
+    if (seasonPlayersRes.error || shotEventsRes.error) {
+      setStatus(toUserMessage(seasonPlayersRes.error?.message ?? shotEventsRes.error?.message));
       return;
     }
 
-    const mappedTeams: SeasonTeam[] = ((teamsRes.data ?? []) as Array<{ team_id: string; teams: { id: string; name: string } | { id: string; name: string }[] }>).map((row) => {
-      const team = Array.isArray(row.teams) ? row.teams[0] : row.teams;
-      return { team_id: row.team_id, name: team?.name ?? "Team" };
-    });
-
-    const mappedSeasonPlayers: SeasonPlayer[] = (
+    const mappedPlayers: PlayerWithTier[] = (
       (seasonPlayersRes.data ?? []) as Array<{
         id: string;
         player_id: string;
@@ -157,368 +91,140 @@ export default function AdminClientPage() {
         is_enabled: boolean;
         players: { display_name: string | null } | { display_name: string | null }[];
       }>
-    ).map((row) => {
-      const player = Array.isArray(row.players) ? row.players[0] : row.players;
-      return {
-        id: row.id,
-        player_id: row.player_id,
-        player_name: player?.display_name ?? "Player",
-        team_id: row.team_id,
-        tier_id: row.tier_id,
-        shots_cap_initial: row.shots_cap_initial,
-        shots_remaining: row.shots_remaining,
-        is_enabled: row.is_enabled,
-      };
-    });
+    )
+      .map((row) => {
+        const player = Array.isArray(row.players) ? row.players[0] : row.players;
+        const tier = tierById.get(row.tier_id);
+        return {
+          id: row.id,
+          player_id: row.player_id,
+          player_name: player?.display_name ?? "Player",
+          team_id: row.team_id,
+          tier_id: row.tier_id,
+          shots_cap_initial: row.shots_cap_initial,
+          shots_remaining: row.shots_remaining,
+          is_enabled: row.is_enabled,
+          tier_name: tier?.name ?? "Unknown tier",
+          tier_sort_order: tier?.sort_order ?? Number.MAX_SAFE_INTEGER,
+        };
+      })
+      .sort(
+        (a, b) =>
+          a.tier_sort_order - b.tier_sort_order ||
+          a.tier_name.localeCompare(b.tier_name) ||
+          a.player_name.localeCompare(b.player_name),
+      );
 
-    setSeasonTeams(mappedTeams);
-    setSeasonPlayers(mappedSeasonPlayers);
-    setShotEvents((shotsRes.data ?? []) as ShotEvent[]);
-    setSelectedSeasonPlayerId((prev) => {
-      if (mappedSeasonPlayers.some((seasonPlayer) => seasonPlayer.id === prev)) {
-        return prev;
-      }
-
-      return mappedSeasonPlayers[0]?.id ?? "";
-    });
-  }, [activeSeason, client]);
-
-  useEffect(() => {
-    void refreshCore();
-  }, [refreshCore]);
-
-  useEffect(() => {
-    void refreshSeasonScoped();
-  }, [refreshSeasonScoped]);
-
-  useEffect(() => {
-    if (!client || !activeSeason) return;
-
-    const channel = subscribeToSeasonRealtime(client, activeSeason.id, () => {
-      void refreshSeasonScoped();
-    });
-
-    return () => {
-      void client.removeChannel(channel);
-    };
-  }, [activeSeason, client, refreshSeasonScoped]);
-
-  async function withSave(action: () => Promise<void>) {
-    setSaving(true);
+    setActiveSeason(active);
+    setPlayers(mappedPlayers);
+    setShotEvents((shotEventsRes.data ?? []) as ShotEvent[]);
     setStatus("");
-    try {
-      await action();
-    } finally {
-      setSaving(false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to load admin data.";
+      setStatus(toUserMessage(message));
     }
-  }
+  }, [client]);
+
+  useEffect(() => {
+    if (!client) return;
+    void loadAdminData();
+  }, [client, loadAdminData]);
+
+  const selectedPlayerShots = useMemo(
+    () => shotEvents.filter((shot) => shot.season_player_id === selectedPlayer?.id),
+    [selectedPlayer, shotEvents],
+  );
 
   if (envError) {
-    return <div className="rounded-lg border border-red-500 p-4 text-red-200">{envError}</div>;
+    return <section className="rounded-xl border border-red-500/40 bg-red-900/30 p-4 text-red-100">{envError}</section>;
   }
 
-
   return (
-    <main className="space-y-6">
-      <header className="space-y-2">
-        <h1 className="text-2xl font-semibold text-emerald-200">Schema Validation Game Loop</h1>
-        <p className="text-sm text-slate-300">Create season, manage players, assign season roster, take shots, and validate realtime score changes.</p>
-        {leagueId && <p className="text-xs text-slate-400">League: {leagueId}</p>}
-        {status && <p className="text-sm text-amber-200">{status}</p>}
+    <section className="space-y-5">
+      <header className="flex items-center justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold text-emerald-200">Admin</h1>
+          <p className="text-sm text-slate-300">{activeSeason ? `Current season: ${activeSeason.name}` : "Current season unavailable"}</p>
+        </div>
+        <button type="button" onClick={() => void loadAdminData()} className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 hover:bg-slate-800">Refresh</button>
       </header>
 
-      {!leagueId ? (
-        <section className="rounded border border-red-500/50 bg-red-950/30 p-4 text-red-100">No active season or membership seed data found. Run the default seed data and ensure at least one active season exists.</section>
-      ) : (
-        <>
-          <section className="rounded border border-slate-700 p-4 space-y-3">
-            <h2 className="font-semibold text-emerald-100">1) Seasons</h2>
-            <ul className="space-y-1 text-sm text-slate-200">
-              {seasons.map((season) => (
-                <li key={season.id}>
-                  {season.name} · {season.format} · {season.status} · cap {season.season_shot_cap}
+      {status && <div className="rounded-lg border border-slate-700 bg-slate-900 p-3 text-sm text-slate-200">{status}</div>}
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <article className="rounded-xl border border-slate-700 bg-slate-900/80 p-4">
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-emerald-300">Recent shot history</h2>
+          <div className="max-h-64 overflow-y-auto rounded-lg border border-slate-800 bg-slate-950/70">
+            <ul className="divide-y divide-slate-800 text-sm">
+              {shotEvents.map((shot) => {
+                const playerName = players.find((player) => player.id === shot.season_player_id)?.player_name ?? "Player";
+                return (
+                  <li key={shot.id} className="px-3 py-2 text-slate-200">
+                    <span className="font-medium text-slate-100">{playerName}</span>
+                    <span className="text-slate-400"> · Shot {shot.shot_number} · {shot.points_awarded} pts</span>
+                  </li>
+                );
+              })}
+              {shotEvents.length === 0 && <li className="px-3 py-4 text-slate-400">No shots yet.</li>}
+            </ul>
+          </div>
+        </article>
+
+        <article className="rounded-xl border border-slate-700 bg-slate-900/80 p-4">
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-emerald-300">Current players by tier</h2>
+          <div className="max-h-64 overflow-y-auto rounded-lg border border-slate-800 bg-slate-950/70">
+            <ul className="divide-y divide-slate-800 text-sm">
+              {players.map((player) => (
+                <li key={player.id}>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedPlayer(player)}
+                    className="flex w-full items-center justify-between px-3 py-2 text-left hover:bg-slate-800/70"
+                  >
+                    <span className="font-medium text-slate-100">{player.player_name}</span>
+                    <span className="text-slate-400">{player.tier_name}</span>
+                  </button>
                 </li>
               ))}
-              {seasons.length === 0 && <li className="text-slate-400">No seasons yet.</li>}
+              {players.length === 0 && <li className="px-3 py-4 text-slate-400">No active players in this season.</li>}
             </ul>
-            <form
-              className="grid md:grid-cols-4 gap-2"
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (!leagueId || !newSeasonName.trim()) return;
-                void withSave(async () => {
-                  const { error } = await createSeason(client!, {
-                    leagueId,
-                    name: newSeasonName.trim(),
-                    format: newSeasonFormat,
-                    seasonShotCap: newSeasonShotCap,
-                  });
-                  if (error) {
-                    setStatus(error.message);
-                    return;
-                  }
-                  setNewSeasonName("");
-                  await refreshCore();
-                });
-              }}
-            >
-              <input className="rounded bg-slate-900 border border-slate-700 p-2" placeholder="Season name" value={newSeasonName} onChange={(e) => setNewSeasonName(e.target.value)} />
-              <select className="rounded bg-slate-900 border border-slate-700 p-2" value={newSeasonFormat} onChange={(e) => setNewSeasonFormat(e.target.value as "team" | "ffa")}>
-                <option value="team">team</option>
-                <option value="ffa">ffa</option>
-              </select>
-              <input type="number" min={1} className="rounded bg-slate-900 border border-slate-700 p-2" value={newSeasonShotCap} onChange={(e) => setNewSeasonShotCap(Number(e.target.value))} />
-              <button className="rounded bg-emerald-500 text-slate-900 font-medium px-3 py-2 disabled:bg-slate-700" disabled={saving}>Create active season</button>
-            </form>
-          </section>
+          </div>
+        </article>
+      </div>
 
-          <section className="rounded border border-slate-700 p-4 space-y-3">
-            <h2 className="font-semibold text-emerald-100">2) Players & Tiers</h2>
-            <div className="grid md:grid-cols-2 gap-4">
-              <form
-                className="space-y-2"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  if (!leagueId || !newPlayerName.trim()) return;
-                  void withSave(async () => {
-                    const { error } = await createPlayer(client!, {
-                      leagueId,
-                      displayName: newPlayerName.trim(),
-                      linkedUserId: newPlayerLinkedUserId.trim() || null,
-                    });
-                    if (error) {
-                      setStatus(error.message);
-                      return;
-                    }
-                    setNewPlayerName("");
-                    setNewPlayerLinkedUserId("");
-                    await refreshCore();
-                  });
-                }}
+      {selectedPlayer && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/75 p-4">
+          <div className="w-full max-w-lg rounded-xl border border-slate-700 bg-slate-900 p-4 shadow-2xl">
+            <div className="mb-3 flex items-start justify-between">
+              <div>
+                <h3 className="text-lg font-semibold text-emerald-200">{selectedPlayer.player_name}</h3>
+                <p className="text-sm text-slate-300">{selectedPlayer.tier_name} shooting history</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedPlayer(null)}
+                className="rounded p-1 text-slate-300 hover:bg-slate-800 hover:text-slate-100"
+                aria-label="Close"
               >
-                <p className="text-sm text-slate-300">Create player</p>
-                <input className="w-full rounded bg-slate-900 border border-slate-700 p-2" placeholder="Display name" value={newPlayerName} onChange={(e) => setNewPlayerName(e.target.value)} />
-                <input className="w-full rounded bg-slate-900 border border-slate-700 p-2" placeholder="Linked user id (optional UUID)" value={newPlayerLinkedUserId} onChange={(e) => setNewPlayerLinkedUserId(e.target.value)} />
-                <button className="rounded bg-emerald-500 text-slate-900 font-medium px-3 py-2 disabled:bg-slate-700" disabled={saving}>Create player</button>
-              </form>
-
-              <form
-                className="space-y-2"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  if (!leagueId || !newTierName.trim()) return;
-                  void withSave(async () => {
-                    const { error } = await createTier(client!, {
-                      leagueId,
-                      name: newTierName.trim(),
-                      sortOrder: newTierSortOrder,
-                    });
-                    if (error) {
-                      setStatus(error.message);
-                      return;
-                    }
-                    setNewTierName("");
-                    await refreshCore();
-                  });
-                }}
-              >
-                <p className="text-sm text-slate-300">Create tier (required for season player)</p>
-                <input className="w-full rounded bg-slate-900 border border-slate-700 p-2" placeholder="Tier name" value={newTierName} onChange={(e) => setNewTierName(e.target.value)} />
-                <input type="number" className="w-full rounded bg-slate-900 border border-slate-700 p-2" value={newTierSortOrder} onChange={(e) => setNewTierSortOrder(Number(e.target.value))} />
-                <button className="rounded bg-emerald-500 text-slate-900 font-medium px-3 py-2 disabled:bg-slate-700" disabled={saving}>Create tier</button>
-              </form>
+                <X className="h-5 w-5" />
+              </button>
             </div>
-          </section>
 
-          {activeSeason && (
-            <>
-              {activeSeason.format === "team" && (
-                <section className="rounded border border-slate-700 p-4 space-y-3">
-                  <h2 className="font-semibold text-emerald-100">3) Teams ({activeSeason.name})</h2>
-                  <ul className="text-sm text-slate-200">
-                    {seasonTeams.map((team) => (
-                      <li key={team.team_id}>{team.name} · score {teamScores[team.team_id] ?? 0}</li>
-                    ))}
-                    {seasonTeams.length === 0 && <li className="text-slate-400">No teams in this season yet.</li>}
-                  </ul>
-                  <form
-                    className="flex gap-2"
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      if (!leagueId || !newTeamName.trim()) return;
-                      void withSave(async () => {
-                        const { error } = await createSeasonTeam(client!, { leagueId, seasonId: activeSeason.id, teamName: newTeamName.trim() });
-                        if (error) {
-                          setStatus(error.message);
-                          return;
-                        }
-                        setNewTeamName("");
-                        await refreshSeasonScoped();
-                      });
-                    }}
-                  >
-                    <input className="flex-1 rounded bg-slate-900 border border-slate-700 p-2" placeholder="Team name" value={newTeamName} onChange={(e) => setNewTeamName(e.target.value)} />
-                    <button className="rounded bg-emerald-500 text-slate-900 font-medium px-3 py-2 disabled:bg-slate-700" disabled={saving}>Create team</button>
-                  </form>
-                </section>
-              )}
-
-              <section className="rounded border border-slate-700 p-4 space-y-3">
-                <h2 className="font-semibold text-emerald-100">4) Season Player Setup</h2>
-                <form
-                  className="grid md:grid-cols-5 gap-2"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    if (!leagueId || !selectedPlayerId || !assignmentTierId) return;
-                    if (activeSeason.format === "team" && !assignmentTeamId) {
-                      setStatus("Team is required for team seasons.");
-                      return;
-                    }
-                    void withSave(async () => {
-                      const { error } = await upsertSeasonPlayer(client!, {
-                        leagueId,
-                        seasonId: activeSeason.id,
-                        playerId: selectedPlayerId,
-                        tierId: assignmentTierId,
-                        teamId: activeSeason.format === "team" ? assignmentTeamId || null : null,
-                        shotsCap: assignmentShotsCap,
-                      });
-                      if (error) {
-                        setStatus(error.message);
-                        return;
-                      }
-                      await refreshSeasonScoped();
-                    });
-                  }}
-                >
-                  <select className="rounded bg-slate-900 border border-slate-700 p-2" value={selectedPlayerId} onChange={(e) => setSelectedPlayerId(e.target.value)}>
-                    <option value="">Select player</option>
-                    {players.map((player) => (
-                      <option key={player.id} value={player.id}>{player.display_name}</option>
-                    ))}
-                  </select>
-                  <select className="rounded bg-slate-900 border border-slate-700 p-2" value={assignmentTierId} onChange={(e) => setAssignmentTierId(e.target.value)}>
-                    <option value="">Tier</option>
-                    {tiers.map((tier) => (
-                      <option key={tier.id} value={tier.id}>{tier.name}</option>
-                    ))}
-                  </select>
-                  <select className="rounded bg-slate-900 border border-slate-700 p-2" value={assignmentTeamId} onChange={(e) => setAssignmentTeamId(e.target.value)} disabled={activeSeason.format !== "team"}>
-                    <option value="">Team</option>
-                    {seasonTeams.map((team) => (
-                      <option key={team.team_id} value={team.team_id}>{team.name}</option>
-                    ))}
-                  </select>
-                  <input type="number" min={1} className="rounded bg-slate-900 border border-slate-700 p-2" value={assignmentShotsCap} onChange={(e) => setAssignmentShotsCap(Number(e.target.value))} />
-                  <button className="rounded bg-emerald-500 text-slate-900 font-medium px-3 py-2 disabled:bg-slate-700" disabled={saving}>Add/Reset player</button>
-                </form>
-
-                <ul className="space-y-2 text-sm">
-                  {players.map((player) => {
-                    const inSeason = seasonPlayers.find((sp) => sp.player_id === player.id);
-                    const tierName = tiers.find((t) => t.id === inSeason?.tier_id)?.name ?? "-";
-                    const teamName = seasonTeams.find((t) => t.team_id === inSeason?.team_id)?.name ?? "-";
-                    return (
-                      <li key={player.id} className="rounded border border-slate-800 p-2">
-                        <div className="flex justify-between">
-                          <span>{player.display_name}</span>
-                          <span className={inSeason ? "text-emerald-300" : "text-slate-500"}>{inSeason ? "IN SEASON" : "NOT IN SEASON"}</span>
-                        </div>
-                        {inSeason && (
-                          <div className="text-slate-300 mt-1">
-                            tier: {tierName} · team: {teamName} · shots remaining: {inSeason.shots_remaining} · score: {playerScores[inSeason.id] ?? 0}
-                          </div>
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
-              </section>
-
-              <section className="rounded border border-slate-700 p-4 space-y-3">
-                <h2 className="font-semibold text-emerald-100">5) Shot Input + Live Validation</h2>
-                <form
-                  className="grid md:grid-cols-5 gap-2"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    if (!leagueId || !selectedSeasonPlayer || !activeSeason) return;
-                    void withSave(async () => {
-                      const { error } = await createShot(client!, {
-                        leagueId,
-                        seasonId: activeSeason.id,
-                        seasonPlayer: selectedSeasonPlayer,
-                        selectedDie,
-                        rolledDice,
-                        basePoints,
-                        isDouble,
-                        isMoneyball,
-                      });
-                      if (error) {
-                        setStatus(error);
-                        return;
-                      }
-                      setIsDouble(false);
-                      setRolledDice(null);
-                      await refreshSeasonScoped();
-                    });
-                  }}
-                >
-                  <select className="rounded bg-slate-900 border border-slate-700 p-2" value={selectedSeasonPlayerId} onChange={(e) => setSelectedSeasonPlayerId(e.target.value)}>
-                    <option value="">Season player</option>
-                    {seasonPlayers.map((sp) => (
-                      <option key={sp.id} value={sp.id}>{sp.player_name}</option>
-                    ))}
-                  </select>
-                  <select className="rounded bg-slate-900 border border-slate-700 p-2" value={basePoints} onChange={(e) => setBasePoints(Number(e.target.value) as 1 | 2)}>
-                    <option value={1}>1</option>
-                    <option value={2}>2</option>
-                  </select>
-                  <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={isDouble} onChange={(e) => setIsDouble(e.target.checked)} />double</label>
-                  <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={isMoneyball} onChange={(e) => setIsMoneyball(e.target.checked)} />moneyball</label>
-                  <button className="rounded bg-emerald-500 text-slate-900 font-medium px-3 py-2 disabled:bg-slate-700" disabled={!selectedSeasonPlayer || selectedSeasonPlayer.shots_remaining <= 0 || saving}>Take shot</button>
-                </form>
-
-
-
-                <DiceRoller
-                  disabled={!selectedSeasonPlayer || selectedSeasonPlayer.shots_remaining <= 0 || saving}
-                  onApply={({ selectedDie: die, rolledDice: dice }) => {
-                    setSelectedDie(die);
-                    setRolledDice(dice);
-                    setStatus(`Selected die ${die} from roll [${dice[0]}, ${dice[1]}].`);
-                  }}
-                />
-                {selectedSeasonPlayer && (
-                  <p className="text-sm text-slate-300">
-                    Player score: {playerScores[selectedSeasonPlayer.id] ?? 0} · Team score: {selectedSeasonPlayer.team_id ? teamScores[selectedSeasonPlayer.team_id] ?? 0 : "N/A"} · Shots remaining: {selectedSeasonPlayer.shots_remaining} · Selected die: {selectedDie}{rolledDice ? ` (from ${rolledDice[0]}, ${rolledDice[1]})` : ""}
-                  </p>
-                )}
-
-                <ul className="space-y-2 text-sm text-slate-200 max-h-80 overflow-auto">
-                  {shotEvents.map((shot) => {
-                    const player = seasonPlayers.find((sp) => sp.id === shot.season_player_id);
-                    const teamName = shot.team_id ? seasonTeams.find((team) => team.team_id === shot.team_id)?.name : null;
-                    return (
-                      <li key={shot.id} className="rounded border border-slate-800 p-2">
-                        #{shot.shot_number} · {player?.player_name ?? "Player"} · die {shot.selected_die} · {shot.base_points}
-                        {shot.is_double ? " x2" : ""} = {shot.points_awarded} pts
-                        {shot.rolled_dice?.length === 2 ? ` · rolled [${shot.rolled_dice[0]}, ${shot.rolled_dice[1]}]` : ""}
-                        {shot.is_moneyball ? " · moneyball" : ""}
-                        {teamName ? ` · team ${teamName}` : ""}
-                      </li>
-                    );
-                  })}
-                  {shotEvents.length === 0 && <li className="text-slate-400">No shot history yet.</li>}
-                </ul>
-              </section>
-            </>
-          )}
-
-          {!activeSeason && <section className="rounded border border-amber-500/50 bg-amber-950/30 p-4 text-amber-200">Create an active season to continue with season player setup and shot input.</section>}
-
-          {/* TODO: Add close season flow and history screens when phase-2 features are started. */}
-        </>
+            <div className="max-h-72 overflow-y-auto rounded-lg border border-slate-800 bg-slate-950/70">
+              <ul className="divide-y divide-slate-800 text-sm">
+                {selectedPlayerShots.map((shot) => (
+                  <li key={shot.id} className="px-3 py-2 text-slate-200">
+                    Shot {shot.shot_number} · {shot.points_awarded} pts
+                    {shot.is_double ? " · double" : ""}
+                    {shot.is_moneyball ? " · moneyball" : ""}
+                  </li>
+                ))}
+                {selectedPlayerShots.length === 0 && <li className="px-3 py-4 text-slate-400">No shots recorded for this player.</li>}
+              </ul>
+            </div>
+          </div>
+        </div>
       )}
-    </main>
+    </section>
   );
 }
